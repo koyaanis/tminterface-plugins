@@ -1,5 +1,5 @@
 // constants
-const array<string> targetNames = { "finish", "cp", "trigger" };
+const array<string> targetNames = { "finish", "checkpoint", "trigger" };
 const array<string> modifyTypes = { "amount", "percentage" };
 
 Manager @m_Manager;
@@ -13,8 +13,6 @@ bool m_canAcceptWorseTimes = false; // will become true if settings are set that
 
 // settings vars
 string m_resultFileName;
-
-string m_target;
 
 bool m_usePreciseTime;
 uint64 m_preciseTimePrecision;
@@ -72,6 +70,13 @@ uint m_iterationsCounter = 0; // iterations counter, used to update the iteratio
 float m_iterationsPerSecond = 0.0f; // iterations per second
 float m_lastIterationsPerSecondUpdate = 0.0f; // last time the iterations per second were updated
 
+/* enum definitions, because somehow we cant define enums inside a class */
+enum TargetType {
+    Finish,
+    Checkpoint,
+    Trigger
+};
+
 
 // helper functions
 string DecimalFormatted(float number, int precision = 10) {
@@ -81,10 +86,22 @@ string DecimalFormatted(double number, int precision = 10) {
     return Text::FormatFloat(number, "{0:10f}", 0, precision);
 }
 
-namespace NormalFin {
+namespace NormalTime {
     void HandleInitialPhase(SimulationManager@ simManager, BFEvaluationResponse&out response, const BFEvaluationInfo&in info) {
-        bool raceFinished = simManager.PlayerInfo.RaceFinished;
         int tickTime = simManager.TickTime;
+
+        bool targetReached = false;
+        switch (m_Manager.m_bfController.m_targetType) {
+            case TargetType::Finish:
+                targetReached = simManager.PlayerInfo.RaceFinished;
+                break;
+            case TargetType::Checkpoint:
+                targetReached = simManager.PlayerInfo.CurCheckpointCount == m_Manager.m_bfController.m_targetId;
+                break;
+            case TargetType::Trigger:
+                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.PreviousState.Location.Position);
+                break;
+        }
 
         // car is allowed to drive until this time (exclusive). this value serves as a way to set a time limit for the simple reason that
         // we cannot wait for an infinite amount of time, and has nothing to do with the fact whether or not we end up with better/worse time
@@ -94,15 +111,30 @@ namespace NormalFin {
             maxTimeLimit += int(m_customStopTimeDelta);
         }
 
-        if (raceFinished || (tickTime > maxTimeLimit)) {
+        if (targetReached || (tickTime > maxTimeLimit)) {
+            m_bestTime = tickTime - 10;
             response.Decision = BFEvaluationDecision::Accept;
             return;
         }
+
+        response.Decision = BFEvaluationDecision::DoNothing;
     }
 
     void HandleSearchPhase(SimulationManager@ simManager, BFEvaluationResponse&out response, const BFEvaluationInfo&in info) {
         int tickTime = simManager.TickTime;
-        bool raceFinished = simManager.PlayerInfo.RaceFinished;
+
+        bool targetReached = false;
+        switch (m_Manager.m_bfController.m_targetType) {
+            case TargetType::Finish:
+                targetReached = simManager.PlayerInfo.RaceFinished;
+                break;
+            case TargetType::Checkpoint:
+                targetReached = simManager.PlayerInfo.CurCheckpointCount == m_Manager.m_bfController.m_targetId;
+                break;
+            case TargetType::Trigger:
+                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.PreviousState.Location.Position);
+                break;
+        }
 
         // see previous usages of this variable for more info
         int maxTimeLimit = m_bestTime;
@@ -110,7 +142,7 @@ namespace NormalFin {
             maxTimeLimit += int(m_customStopTimeDelta);
         }
 
-        if (raceFinished) {
+        if (targetReached) {
             if (tickTime > maxTimeLimit) {
                 response.Decision = BFEvaluationDecision::Reject;
                 return;
@@ -161,24 +193,37 @@ namespace NormalFin {
     }
 }
 
-namespace PreciseFin {
+namespace PreciseTime {
     double bestPreciseTime; // best precise time the bf found so far
     double bestPreciseTimeEver; // keeps track for the best precise time ever reached, useful for bf that allows for worse times to be found
     bool isEstimating = false;
     uint64 coeffMin = 0;
     uint64 coeffMax = 18446744073709551615; 
-    SimulationState@ originalStateBeforeFinish;
+    SimulationState@ originalStateBeforeTargetHit;
 
     void HandleInitialPhase(SimulationManager@ simManager, BFEvaluationResponse&out response, const BFEvaluationInfo&in info) {
-        bool raceFinished = simManager.PlayerInfo.RaceFinished;
         int tickTime = simManager.TickTime;
+
+        bool targetReached = false;
+        switch (m_Manager.m_bfController.m_targetType) {
+            case TargetType::Finish:
+                targetReached = simManager.PlayerInfo.RaceFinished;
+                break;
+            case TargetType::Checkpoint:
+                targetReached = simManager.PlayerInfo.CurCheckpointCount == m_Manager.m_bfController.m_targetId;
+                break;
+            case TargetType::Trigger:
+                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
+                break;
+        }
 
         int maxTimeLimit = m_bestTime;
         if (m_customStopTimeDelta != 0.0) {
             maxTimeLimit += int(m_customStopTimeDelta);
         }
 
-        if (raceFinished || (tickTime > maxTimeLimit)) {
+        if (targetReached || (tickTime > maxTimeLimit)) {
+            m_bestTime = tickTime - 10;
             response.Decision = BFEvaluationDecision::Accept;
             return;
         }
@@ -187,8 +232,20 @@ namespace PreciseFin {
     }
 
     void HandleSearchPhase(SimulationManager@ simManager, BFEvaluationResponse&out response, const BFEvaluationInfo&in info) {
-        bool raceFinished = simManager.PlayerInfo.RaceFinished;
         int tickTime = simManager.TickTime;
+
+        bool targetReached = false;
+        switch (m_Manager.m_bfController.m_targetType) {
+            case TargetType::Finish:
+                targetReached = simManager.PlayerInfo.RaceFinished;
+                break;
+            case TargetType::Checkpoint:
+                targetReached = simManager.PlayerInfo.CurCheckpointCount == m_Manager.m_bfController.m_targetId;
+                break;
+            case TargetType::Trigger:
+                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
+                break;
+        }
 
         // see previous usages of this variable for more info
         int maxTimeLimit = m_bestTime;
@@ -196,33 +253,33 @@ namespace PreciseFin {
             maxTimeLimit += int(m_customStopTimeDelta);
         }
 
-        if (!PreciseFin::isEstimating) {
-            if (!raceFinished) {
+        if (!PreciseTime::isEstimating) {
+            if (!targetReached) {
                 if (tickTime > maxTimeLimit) {
                     response.Decision = BFEvaluationDecision::Reject;
                     return;
                 }
 
-                @PreciseFin::originalStateBeforeFinish = simManager.SaveState();
+                @PreciseTime::originalStateBeforeTargetHit = simManager.SaveState();
                 response.Decision = BFEvaluationDecision::DoNothing;
                 return;
             } else {
-                PreciseFin::isEstimating = true;
+                PreciseTime::isEstimating = true;
             }
         } else {
-            if (raceFinished) {
-                PreciseFin::coeffMax = PreciseFin::coeffMin + (PreciseFin::coeffMax - PreciseFin::coeffMin) / 2;
+            if (targetReached) {
+                PreciseTime::coeffMax = PreciseTime::coeffMin + (PreciseTime::coeffMax - PreciseTime::coeffMin) / 2;
             } else {
-                PreciseFin::coeffMin = PreciseFin::coeffMin + (PreciseFin::coeffMax - PreciseFin::coeffMin) / 2;
+                PreciseTime::coeffMin = PreciseTime::coeffMin + (PreciseTime::coeffMax - PreciseTime::coeffMin) / 2;
             }
         }
 
-        simManager.RewindToState(PreciseFin::originalStateBeforeFinish);
+        simManager.RewindToState(PreciseTime::originalStateBeforeTargetHit);
         
-        uint64 currentCoeff = PreciseFin::coeffMin + (PreciseFin::coeffMax - PreciseFin::coeffMin) / 2;
+        uint64 currentCoeff = PreciseTime::coeffMin + (PreciseTime::coeffMax - PreciseTime::coeffMin) / 2;
         double currentCoeffPercentage = currentCoeff / 18446744073709551615.0;
 
-        if (PreciseFin::coeffMax - PreciseFin::coeffMin > m_preciseTimePrecision) {
+        if (PreciseTime::coeffMax - PreciseTime::coeffMin > m_preciseTimePrecision) {
             vec3 LinearSpeed = simManager.Dyna.CurrentState.LinearSpeed;
             vec3 AngularSpeed = simManager.Dyna.CurrentState.AngularSpeed;
             LinearSpeed *= currentCoeffPercentage;
@@ -234,12 +291,12 @@ namespace PreciseFin {
         }
 
         // finished estimating precise time
-        PreciseFin::isEstimating = false;
-        PreciseFin::coeffMin = 0;
-        PreciseFin::coeffMax = 18446744073709551615;
+        PreciseTime::isEstimating = false;
+        PreciseTime::coeffMin = 0;
+        PreciseTime::coeffMax = 18446744073709551615;
 
         double foundPreciseTime = (simManager.RaceTime / 1000.0) + (currentCoeffPercentage / 100.0);
-        double previousBestPreciseTime = PreciseFin::bestPreciseTime;
+        double previousBestPreciseTime = PreciseTime::bestPreciseTime;
 
         // see previous usages of this variable for more info (maxTimeLimit)
         double maxPreciseTimeLimit = previousBestPreciseTime;
@@ -263,12 +320,12 @@ namespace PreciseFin {
 
         // anything below this point means we will accept the new time
 
-        PreciseFin::bestPreciseTime = foundPreciseTime;
-        m_bestTime = int(Math::Floor(PreciseFin::bestPreciseTime * 100.0)) * 10;
+        PreciseTime::bestPreciseTime = foundPreciseTime;
+        m_bestTime = int(Math::Floor(PreciseTime::bestPreciseTime * 100.0)) * 10;
 
         // check if best time ever was driven
-        if (PreciseFin::bestPreciseTime < PreciseFin::bestPreciseTimeEver) {
-            PreciseFin::bestPreciseTimeEver = PreciseFin::bestPreciseTime;
+        if (PreciseTime::bestPreciseTime < PreciseTime::bestPreciseTimeEver) {
+            PreciseTime::bestPreciseTimeEver = PreciseTime::bestPreciseTime;
         }
         if (m_bestTime < m_bestTimeEver) {
             m_bestTimeEver = m_bestTime;
@@ -292,40 +349,51 @@ namespace PreciseFin {
     }
 }
 
-// variables that bruteforce needs to work and cannot be changed during simulation
-void SetBruteforceVariables() {
-    SimulationManager@ simManager = m_Manager.m_simManager;
-
-    // General Variables
-    m_bestTime = simManager.EventsDuration; // original time of the replay
-    m_bestTimeEver = m_bestTime;
-
-    m_iterations = 0;
-    m_iterationsCounter = 0;
-    m_iterationsPerSecond = 0.0f;
-    m_lastIterationsPerSecondUpdate = 0.0f;
-
-    // PreciseFin Variables
-    PreciseFin::isEstimating = false;
-    PreciseFin::coeffMin = 0;
-    PreciseFin::coeffMax = 18446744073709551615;
-    PreciseFin::bestPreciseTime = double(m_bestTime + 10) / 1000.0; // best precise time the bf found so far
-    // PreciseFin helper variables
-    PreciseFin::bestPreciseTimeEver = PreciseFin::bestPreciseTime;
-
-    // Bruteforce Variables
-    m_resultFileName = GetVariableString("kim_bf_result_file_name");
-
-    m_target = GetVariableString("kim_bf_target");
-
-    m_useFillMissingInputsSteering = GetVariableBool("kim_bf_use_fill_missing_inputs_steering");
-    m_useFillMissingInputsAcceleration = GetVariableBool("kim_bf_use_fill_missing_inputs_acceleration");
-    m_useFillMissingInputsBrake = GetVariableBool("kim_bf_use_fill_missing_inputs_brake");
-}
-
 // general settings that can be updated during our outside of bruteforce and can be called at any point in time
 void UpdateSettings() {
     SimulationManager@ simManager = m_Manager.m_simManager;
+
+    // m_target, m_targetType, m_targetId. only check this when bruteforce is inactive when updating settings, the bruteforce controller will have
+    // additional checks for this by itself
+    if (@simManager == null || !m_Manager.m_bfController.active) {
+        // string for the target used for console settings
+        m_Manager.m_bfController.m_target = GetVariableString("kim_bf_target");
+        // target as enum for bruteforce
+        if (m_Manager.m_bfController.m_target == "finish") {
+            m_Manager.m_bfController.m_targetType = TargetType::Finish;
+        } else if (m_Manager.m_bfController.m_target == "checkpoint") {
+            m_Manager.m_bfController.m_targetType = TargetType::Checkpoint;
+        } else if (m_Manager.m_bfController.m_target == "trigger") {
+            m_Manager.m_bfController.m_targetType = TargetType::Trigger;
+        } else {
+            // reset it to finish if it was invalid
+            m_Manager.m_bfController.m_target = targetNames[0];
+            m_Manager.m_bfController.m_targetType = TargetType(0);
+            SetVariable("kim_bf_target", targetNames[0]);
+        }
+
+        // in case of checkpoint or trigger, the index of the target
+        uint targetId = uint(Math::Max(GetVariableDouble("kim_bf_target_id"), 1.0));
+
+        // check if target id is valid
+        switch (m_Manager.m_bfController.m_targetType) {
+            case TargetType::Finish:
+                // no need to check anything
+                break;
+            case TargetType::Checkpoint:
+                // nothing can be done for checkpoints, we are not on a map
+                break; 
+            case TargetType::Trigger:
+                // we can check for triggers because those are built into TMI
+                if (targetId > GetTriggerIds().Length) {
+                    // reset it to 1 if it was invalid
+                    targetId = 1;
+                }
+                break;
+        }
+        m_Manager.m_bfController.m_targetId = targetId;
+        SetVariable("kim_bf_target_id", targetId);
+    }
 
     // precise time
     m_usePreciseTime = GetVariableBool("kim_bf_use_precise_time");
@@ -334,6 +402,9 @@ void UpdateSettings() {
 		m_preciseTimePrecision = uint(Math::Max(1, int(GetVariableDouble("kim_bf_precise_time_precision"))));
         SetVariable("kim_bf_precise_time_precision", m_preciseTimePrecision);
 	}
+
+    // modify type
+    m_modifyType = GetVariableString("kim_bf_modify_type");
 
     // input modification time range
     m_modifySteeringMinTime = uint(Math::Max(0, int(GetVariableDouble("kim_bf_modify_steering_min_time"))));
@@ -431,7 +502,7 @@ void UpdateSettings() {
 		m_customStopTimeDelta = double(m_customStopTimeDelta * 1000.0);
 	}
 
-    if (@simManager != null && m_Manager.m_controller.active) {
+    if (@simManager != null && m_Manager.m_bfController.active) {
         m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + m_bestTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
     }
 
@@ -456,6 +527,87 @@ class BruteforceController {
     BruteforceController() {}
     ~BruteforceController() {}
 
+    // variables that bruteforce needs to work and cannot be changed during simulation
+    void SetBruteforceVariables(SimulationManager@ simManager) {
+        // General Variables
+        m_bestTime = simManager.EventsDuration; // original time of the replay
+        m_bestTimeEver = m_bestTime;
+
+        m_iterations = 0;
+        m_iterationsCounter = 0;
+        m_iterationsPerSecond = 0.0f;
+        m_lastIterationsPerSecondUpdate = 0.0f;
+
+        // PreciseTime Variables
+        PreciseTime::isEstimating = false;
+        PreciseTime::coeffMin = 0;
+        PreciseTime::coeffMax = 18446744073709551615;
+        PreciseTime::bestPreciseTime = double(m_bestTime + 10) / 1000.0; // best precise time the bf found so far
+        // PreciseTime helper variables
+        PreciseTime::bestPreciseTimeEver = PreciseTime::bestPreciseTime;
+
+        // Bruteforce Variables
+        m_resultFileName = GetVariableString("kim_bf_result_file_name");
+
+
+        // m_target, m_targetType, m_targetId
+        m_target = GetVariableString("kim_bf_target");
+        // target as enum for bruteforce
+        if (m_target == "finish") {
+            m_targetType = TargetType::Finish;
+        } else if (m_target == "checkpoint") {
+            m_targetType = TargetType::Checkpoint;
+        } else if (m_target == "trigger") {
+            m_targetType = TargetType::Trigger;
+        } else {
+            print("Invalid bruteforce target: " + m_target + ", stopping bruteforce..", Severity::Error);
+            OnSimulationEnd(simManager);
+            return;
+        }
+
+        // in case of checkpoint or trigger, the index of the target
+        uint targetId = uint(Math::Max(GetVariableDouble("kim_bf_target_id"), 1.0));
+
+        // check if target id is valid
+        switch (m_targetType) {
+            case TargetType::Finish:
+                // no need to check anything
+                break;
+            case TargetType::Checkpoint:
+            {
+                uint checkpointCount = simManager.PlayerInfo.Checkpoints.Length;
+                if (targetId > checkpointCount) {
+                    print("Checkpoint with target id " + targetId + " does not exist on this map, change the target id in settings to fix this issue. stopping bruteforce..", Severity::Error);
+                    OnSimulationEnd(simManager);
+                    return;
+                }
+                break;
+            }
+            case TargetType::Trigger:
+            {
+                uint triggerCount = GetTriggerIds().Length;
+                if (triggerCount == 0) {
+                    print("No triggers found, ending bruteforce.", Severity::Error);
+                    OnSimulationEnd(simManager);
+                    return;
+                }
+                // if too high target id is specified, set to highest poss
+                if (targetId > triggerCount) {
+                    print("Trigger with target id " + targetId + " does not exist, change the target id in settings to fix this issue. stopping bruteforce..", Severity::Error);
+                    OnSimulationEnd(simManager);
+                    return;
+                }
+                break;
+            }
+        }
+
+        m_targetId = targetId;
+
+
+        m_useFillMissingInputsSteering = GetVariableBool("kim_bf_use_fill_missing_inputs_steering");
+        m_useFillMissingInputsAcceleration = GetVariableBool("kim_bf_use_fill_missing_inputs_acceleration");
+        m_useFillMissingInputsBrake = GetVariableBool("kim_bf_use_fill_missing_inputs_brake");
+    }
     
     void StartInitialPhase() {
         UpdateIterationsPerSecond(); // it aint really an iteration, but it kinda wont update the performance of the simulation if you happen to have a lot of initial phases
@@ -496,7 +648,7 @@ class BruteforceController {
         m_simManager.InputEvents.RemoveAt(m_simManager.InputEvents.Length - 1);
         
         // handle variables 
-        SetBruteforceVariables();
+        SetBruteforceVariables(simManager);
         UpdateSettings();
 
         // one time variables that cannot be changed during simulation
@@ -515,6 +667,9 @@ class BruteforceController {
         active = false;
 
         m_originalSimulationStates = array<SimulationState@>();
+
+        // set the simulation time limit to make the game quit the simulation right away, or else we'll have to wait all the way until the end of the replay..
+        simManager.SetSimulationTimeLimit(0.0);
     }
 
     void FillMissingInputs(SimulationManager@ simManager) {
@@ -1126,8 +1281,8 @@ class BruteforceController {
                         m_commandList.Save(m_resultFileName);
                     }
                 } else {
-                    if (PreciseFin::bestPreciseTime == PreciseFin::bestPreciseTimeEver) {
-                        m_commandList.Content = "# Found precise time: " + DecimalFormatted(PreciseFin::bestPreciseTime, 16) + ", iterations: " + m_iterations + "\n";
+                    if (PreciseTime::bestPreciseTime == PreciseTime::bestPreciseTimeEver) {
+                        m_commandList.Content = "# Found precise time: " + DecimalFormatted(PreciseTime::bestPreciseTime, 16) + ", iterations: " + m_iterations + "\n";
                         m_commandList.Content += simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
                         m_commandList.Save(m_resultFileName);
                     }
@@ -1152,8 +1307,7 @@ class BruteforceController {
         }
     }
 
-    void RestoreInputBuffer()
-    {
+    void RestoreInputBuffer() {
         m_simManager.InputEvents.Clear();
         for (uint i = 0; i < m_originalInputEvents.Length; i++) {
             m_simManager.InputEvents.Add(m_originalInputEvents[i]);
@@ -1179,20 +1333,20 @@ class BruteforceController {
 
     void HandleSearchPhase(SimulationManager@ simManager, BFEvaluationResponse&out response, BFEvaluationInfo&in info) {
         if (m_usePreciseTime) {
-            PreciseFin::HandleSearchPhase(m_simManager, response, info);
+            PreciseTime::HandleSearchPhase(m_simManager, response, info);
             return;
         } else {
-            NormalFin::HandleSearchPhase(m_simManager, response, info);
+            NormalTime::HandleSearchPhase(m_simManager, response, info);
             return;
         }
     }
 
     void HandleInitialPhase(SimulationManager@ simManager, BFEvaluationResponse&out response, BFEvaluationInfo&in info) {
         if (m_usePreciseTime) {
-            PreciseFin::HandleInitialPhase(m_simManager, response, info);
+            PreciseTime::HandleInitialPhase(m_simManager, response, info);
             return;
         } else {
-            NormalFin::HandleInitialPhase(m_simManager, response, info);
+            NormalTime::HandleInitialPhase(m_simManager, response, info);
             return;
         }
     }
@@ -1222,7 +1376,7 @@ class BruteforceController {
 
         if (m_useInfoLogging) {
             if (m_usePreciseTime) {
-                message += "best precise time: " + DecimalFormatted(PreciseFin::bestPreciseTime, 16);
+                message += "best precise time: " + DecimalFormatted(PreciseTime::bestPreciseTime, 16);
             } else {
                 message += "best time: " + Text::FormatInt(m_bestTime);
             }
@@ -1242,7 +1396,7 @@ class BruteforceController {
         m_iterations++;
         m_iterationsCounter++;
 
-        if (m_iterationsCounter % 200 == 0) {
+        if (m_iterationsCounter % 1 == 0) {
             PrintBruteforceInfo();
 
             float currentTime = float(Time::Now);
@@ -1257,7 +1411,12 @@ class BruteforceController {
     SimulationManager@ m_simManager;
     CommandList m_commandList;
     bool active = false;
-    BFPhase m_phase;
+    BFPhase m_phase = BFPhase::Initial;
+
+    // initialized as "finish"
+    string m_target = targetNames[0];
+    TargetType m_targetType = TargetType(0);
+    uint m_targetId = 1; // used for checkpoint/trigger targets, id is index+1
 
     array<SimulationState@> m_originalSimulationStates = {};
     array<TM::InputEvent> m_originalInputEvents; 
@@ -1267,35 +1426,35 @@ class BruteforceController {
 
 class Manager {
     Manager() {
-        @m_controller = BruteforceController();
+        @m_bfController = BruteforceController();
     }
     ~Manager() {}
 
     void OnSimulationBegin(SimulationManager@ simManager) {
         @m_simManager = simManager;
         m_simManager.RemoveStateValidation();
-        m_controller.OnSimulationBegin(simManager);
+        m_bfController.OnSimulationBegin(simManager);
     }
 
     void OnSimulationStep(SimulationManager@ simManager, bool userCancelled) {
         if (userCancelled) {
-            m_controller.OnSimulationEnd(simManager);
+            m_bfController.OnSimulationEnd(simManager);
             return;
         }
 
-        m_controller.OnSimulationStep(simManager);
+        m_bfController.OnSimulationStep(simManager);
     }
 
     void OnSimulationEnd(SimulationManager@ simManager, uint result) {
-        m_controller.OnSimulationEnd(simManager);
+        m_bfController.OnSimulationEnd(simManager);
     }
 
     void OnCheckpointCountChanged(SimulationManager@ simManager, int count, int target) {
-        m_controller.OnCheckpointCountChanged(simManager, count, target);
+        m_bfController.OnCheckpointCountChanged(simManager, count, target);
     }
 
     SimulationManager@ m_simManager;
-    BruteforceController@ m_controller;
+    BruteforceController@ m_bfController;
 }
 
 /* these functions are called from the game, we relay them to our manager */
@@ -1326,7 +1485,7 @@ void BruteforceSettingsWindow() {
 
     // m_resultFileName
     UI::PushItemWidth(120);
-    if (!m_Manager.m_controller.active) {
+    if (!m_Manager.m_bfController.active) {
         m_resultFileName = UI::InputTextVar("Result file name", "kim_bf_result_file_name");
     } else {
         UI::Text("Result file name " + m_resultFileName);
@@ -1342,23 +1501,61 @@ void BruteforceSettingsWindow() {
     UI::Text("Target");
     UI::SameLine();
     
-    if (!m_Manager.m_controller.active) {
-        m_target = GetVariableString("kim_bf_target");
-        if (UI::BeginCombo("##target", m_target)) {
+    if (!m_Manager.m_bfController.active) {
+        m_Manager.m_bfController.m_target = GetVariableString("kim_bf_target");
+        if (UI::BeginCombo("##target", m_Manager.m_bfController.m_target)) {
             for (uint i = 0; i < targetNames.Length; i++) {
-                bool isSelected = m_target == targetNames[i];
+                bool isSelected = m_Manager.m_bfController.m_target == targetNames[i];
                 if (UI::Selectable(targetNames[i], isSelected)) {
-                    m_target = targetNames[i];
+                    m_Manager.m_bfController.m_target = targetNames[i];
                     SetVariable("kim_bf_target", targetNames[i]);
+                    m_Manager.m_bfController.m_targetType = TargetType(i);
+                    m_Manager.m_bfController.m_targetId = uint(GetVariableDouble("kim_bf_target_id"));
                 }
             }
             UI::EndCombo();
         }
     } else {
-        UI::Text(m_target);
+        UI::Text(m_Manager.m_bfController.m_target);
     }
 
-    UI::TextDimmed("(only finish is implemented atm)");
+    // if target is checkpoint or trigger, show index
+    if (m_Manager.m_bfController.m_targetType == TargetType::Checkpoint || m_Manager.m_bfController.m_targetType == TargetType::Trigger) {
+        UI::SameLine();
+        UI::Text("Index");
+        UI::SameLine();
+        if (!m_Manager.m_bfController.active) {
+            // target id is index+1, 0 will be used for invalid or unused in case of finish
+            uint targetId = Math::Max(UI::InputIntVar("##targetid", "kim_bf_target_id", 1), 1);
+            // check if target id is valid
+            switch (m_Manager.m_bfController.m_targetType) {
+                case TargetType::Checkpoint:
+                    // we cant check for checkpoint count because we havent loaded a map, simple set the value, an error will be given on bruteforce start
+                    SetVariable("kim_bf_target_id", targetId);
+                    break;
+                case TargetType::Trigger:
+                {
+                    uint triggerCount = GetTriggerIds().Length;
+                    // if no triggers exist, give a warning message but keep the value anyway, we check on bruteforce
+                    // start for it and give an additional message and end the bruteforce, same goes for too high target id
+                    if (triggerCount == 0) {
+                        UI::Text("No triggers found");
+                        break;
+                    }
+                    // if too high target id is specified, set to highest poss
+                    if (targetId > triggerCount) {
+                        UI::Text("Trigger with id " + targetId + " does not exist.");
+                        break;
+                    }
+                    SetVariable("kim_bf_target_id", targetId);
+                    break;
+                }
+            }
+        } else {
+            UI::Text("" + m_Manager.m_bfController.m_targetId);
+        }
+    }
+
     UI::PopItemWidth();
 
     
@@ -1679,7 +1876,7 @@ void BruteforceSettingsWindow() {
 
     UI::Text("Fill Missing Inputs:");
     // kim_bf_use_fill_missing_inputs_steering, kim_bf_use_fill_missing_inputs_acceleration, kim_bf_use_fill_missing_inputs_brake
-    if (!m_Manager.m_controller.active) {
+    if (!m_Manager.m_bfController.active) {
         m_useFillMissingInputsSteering =  UI::CheckboxVar("Fill Missing Steering Input", "kim_bf_use_fill_missing_inputs_steering");
         m_useFillMissingInputsAcceleration = UI::CheckboxVar("Fill Missing Acceleration Input", "kim_bf_use_fill_missing_inputs_acceleration");
         m_useFillMissingInputsBrake = UI::CheckboxVar("Fill Missing Brake Input", "kim_bf_use_fill_missing_inputs_brake");
@@ -1718,7 +1915,7 @@ void BruteforceSettingsWindow() {
     }
 
     if (previousCustomStopTimeDelta != m_customStopTimeDelta) {
-        if (@m_Manager.m_simManager != null && m_Manager.m_controller.active) {
+        if (@m_Manager.m_simManager != null && m_Manager.m_bfController.active) {
             m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + m_bestTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
         }
     }
@@ -1761,7 +1958,8 @@ void Main() {
     
     RegisterVariable("kim_bf_result_file_name", "result.txt");
 
-    RegisterVariable("kim_bf_target", "finish"); // finish, cp, trigger (only finish implemented atm)
+    RegisterVariable("kim_bf_target", targetNames[0]); // "finish" / "checkpoint" / "trigger"
+    RegisterVariable("kim_bf_target_id", 1.0); // id of target (index + 1), used for checkpoint/trigger
 
     RegisterVariable("kim_bf_use_precise_time", true);
     RegisterVariable("kim_bf_precise_time_precision", 1.0);
@@ -1773,7 +1971,7 @@ void Main() {
     RegisterVariable("kim_bf_modify_acceleration_max_time", 0.0);
     RegisterVariable("kim_bf_modify_brake_max_time", 0.0);
 
-    RegisterVariable("kim_bf_modify_type", "amount"); // "amount" / "percentage"
+    RegisterVariable("kim_bf_modify_type", modifyTypes[0]); // "amount" / "percentage"
     RegisterVariable("kim_bf_modify_steering_min_amount", 0.0);
     RegisterVariable("kim_bf_modify_acceleration_min_amount", 0.0);
     RegisterVariable("kim_bf_modify_brake_min_amount", 0.0);
