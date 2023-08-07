@@ -2018,7 +2018,7 @@ PluginInfo@ GetPluginInfo() {
     auto info = PluginInfo();
     info.Name = "Kim's Bruteforce Controller";
     info.Author = "Kim";
-    info.Version = "v1.2.0";
+    info.Version = "v1.3.0";
     info.Description = "General bruteforcing capabilities";
     return info;
 }
