@@ -63,6 +63,7 @@ float m_worseResultAcceptanceProbability;
 
 bool m_useInfoLogging;
 bool m_useIterLogging;
+uint m_loggingInterval;
 
 // info vars
 uint m_iterations = 0; // total iterations
@@ -372,7 +373,7 @@ void UpdateSettings() {
             SetVariable("kim_bf_target", targetNames[0]);
         }
 
-        // in case of checkpoint or trigger, the index of the target
+        // m_targetId
         uint targetId = uint(Math::Max(GetVariableDouble("kim_bf_target_id"), 1.0));
 
         // check if target id is valid
@@ -386,8 +387,7 @@ void UpdateSettings() {
             case TargetType::Trigger:
                 // we can check for triggers because those are built into TMI
                 if (targetId > GetTriggerIds().Length) {
-                    // reset it to 1 if it was invalid
-                    targetId = 1;
+                    targetId = GetTriggerIds().Length;
                 }
                 break;
         }
@@ -512,7 +512,7 @@ void UpdateSettings() {
     // logging
     m_useInfoLogging = GetVariableBool("kim_bf_use_info_logging");
     m_useIterLogging = GetVariableBool("kim_bf_use_iter_logging");
-
+    m_loggingInterval = Math::Clamp(uint(GetVariableDouble("kim_bf_logging_interval")), 1, 1000);
 
 
     /* helper vars */
@@ -587,7 +587,7 @@ class BruteforceController {
             {
                 uint triggerCount = GetTriggerIds().Length;
                 if (triggerCount == 0) {
-                    print("No triggers found, ending bruteforce.", Severity::Error);
+                    print("Cannot bruteforce for trigger target, no triggers were found. stopping bruteforce..", Severity::Error);
                     OnSimulationEnd(simManager);
                     return;
                 }
@@ -1396,7 +1396,7 @@ class BruteforceController {
         m_iterations++;
         m_iterationsCounter++;
 
-        if (m_iterationsCounter % 1 == 0) {
+        if (m_iterationsCounter % m_loggingInterval == 0) {
             PrintBruteforceInfo();
 
             float currentTime = float(Time::Now);
@@ -1510,7 +1510,6 @@ void BruteforceSettingsWindow() {
                     m_Manager.m_bfController.m_target = targetNames[i];
                     SetVariable("kim_bf_target", targetNames[i]);
                     m_Manager.m_bfController.m_targetType = TargetType(i);
-                    m_Manager.m_bfController.m_targetId = uint(GetVariableDouble("kim_bf_target_id"));
                 }
             }
             UI::EndCombo();
@@ -1526,7 +1525,7 @@ void BruteforceSettingsWindow() {
         UI::SameLine();
         if (!m_Manager.m_bfController.active) {
             // target id is index+1, 0 will be used for invalid or unused in case of finish
-            uint targetId = Math::Max(UI::InputIntVar("##targetid", "kim_bf_target_id", 1), 1);
+            uint targetId = uint(Math::Max(UI::InputIntVar("##targetid", "kim_bf_target_id", 1), 1));
             // check if target id is valid
             switch (m_Manager.m_bfController.m_targetType) {
                 case TargetType::Checkpoint:
@@ -1536,17 +1535,12 @@ void BruteforceSettingsWindow() {
                 case TargetType::Trigger:
                 {
                     uint triggerCount = GetTriggerIds().Length;
-                    // if no triggers exist, give a warning message but keep the value anyway, we check on bruteforce
-                    // start for it and give an additional message and end the bruteforce, same goes for too high target id
                     if (triggerCount == 0) {
-                        UI::Text("No triggers found");
-                        break;
+                        UI::Text("No triggers found. Make sure to add triggers");
+                    } else if (targetId > triggerCount) {
+                        targetId = triggerCount;
                     }
-                    // if too high target id is specified, set to highest poss
-                    if (targetId > triggerCount) {
-                        UI::Text("Trigger with id " + targetId + " does not exist.");
-                        break;
-                    }
+                    m_Manager.m_bfController.m_targetId = targetId;
                     SetVariable("kim_bf_target_id", targetId);
                     break;
                 }
@@ -1946,7 +1940,12 @@ void BruteforceSettingsWindow() {
     m_useIterLogging = UI::CheckboxVar("Log Iterations", "kim_bf_use_iter_logging");
     UI::TextDimmed("Log information about each iteration to the console.");
 
-    UI::TextDimmed("This awkwardly prints to console every 200 iterations at the moment");
+    // kim_bf_logging_interval
+    UI::PushItemWidth(180);
+    m_loggingInterval = uint(Math::Clamp(UI::SliderIntVar("Logging Interval", "kim_bf_logging_interval", 1, 1000), 1, 1000));
+    SetVariable("kim_bf_logging_interval", m_loggingInterval);
+    UI::TextDimmed("Log to console every x iterations.");
+    UI::PopItemWidth();
 
 
     // specify any conditions that could lead to a worse time here
@@ -2006,6 +2005,7 @@ void Main() {
 
     RegisterVariable("kim_bf_use_info_logging", true);
     RegisterVariable("kim_bf_use_iter_logging", true);
+    RegisterVariable("kim_bf_logging_interval", 200.0);
 
     RegisterVariable("kim_bf_worse_result_acceptance_probability", 1.0f);
 
