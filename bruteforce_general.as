@@ -6,6 +6,10 @@ Manager @m_Manager;
 // bruteforce vars
 int m_bestTime; // best time the bf found so far, precise or not
 
+// helper vars
+int m_bestTimeEver; // keeps track for the best time ever reached, useful for bf that allows for worse times to be found
+bool m_canAcceptWorseTimes = false; // will become true if settings are set that allow for worse times to be found
+
 // settings vars
 string m_resultFileName;
 
@@ -48,6 +52,9 @@ bool m_useFillMissingInputsBrake;
 // todo: make the typing of this var less not good
 double m_customStopTimeDelta;
 
+// this will only be used for cases where worse times can be driven, meaning m_canAcceptWorseTimes has to be true, otherwise it has no effect
+float m_worseResultAcceptanceProbability;
+
 bool m_useInfoLogging;
 bool m_useIterLogging;
 
@@ -71,7 +78,15 @@ namespace NormalFin {
         bool raceFinished = simManager.PlayerInfo.RaceFinished;
         int tickTime = simManager.TickTime;
 
-        if (raceFinished || (tickTime > (m_customStopTimeDelta != 0.0 ? (int(m_customStopTimeDelta) + m_bestTime) : m_bestTime))) {
+        // car is allowed to drive until this time (exclusive). this value serves as a way to set a time limit for the simple reason that
+        // we cannot wait for an infinite amount of time, and has nothing to do with the fact whether or not we end up with better/worse time
+        // or if we want to accept or not accept better/worse times.
+        int maxTimeLimit = m_bestTime;
+        if (m_customStopTimeDelta != 0.0) {
+            maxTimeLimit += int(m_customStopTimeDelta);
+        }
+
+        if (raceFinished || (tickTime > maxTimeLimit)) {
             response.Decision = BFEvaluationDecision::Accept;
             return;
         }
@@ -81,38 +96,57 @@ namespace NormalFin {
         int tickTime = simManager.TickTime;
         bool raceFinished = simManager.PlayerInfo.RaceFinished;
 
+        // see previous usages of this variable for more info
+        int maxTimeLimit = m_bestTime;
+        if (m_customStopTimeDelta != 0.0) {
+            maxTimeLimit += int(m_customStopTimeDelta);
+        }
+
         if (raceFinished) {
-            if (tickTime > (m_customStopTimeDelta != 0.0 ? (int(m_customStopTimeDelta) + m_bestTime) : m_bestTime)) {
+            if (tickTime > maxTimeLimit) {
                 response.Decision = BFEvaluationDecision::Reject;
                 return;
             }
 
             int newTime = tickTime - 10;
+            int previousBestTime = m_bestTime;
+
+            // handle worse result acceptance probability
+            if (m_canAcceptWorseTimes && newTime > previousBestTime) {
+                if (Math::Rand(0.0f, 1.0f) > m_worseResultAcceptanceProbability) {
+                    response.Decision = BFEvaluationDecision::Reject;
+                    return;
+                }
+            }
+
+            // anything below this point means we will accept the new time
 
             string message = "Found";
-            // im just explicitly doing the if check against m_customStopTimeDelta to make more clear what is going on
-            if (m_customStopTimeDelta == 0.0) {
-                message += " lower time: " + Text::FormatInt(newTime);
+            // higher or equal can only occur if settings are set up in such a way that worse (or equal) times are allowed to be found
+            if (newTime < previousBestTime) {
+                message += " lower ";
+            } else if (newTime == previousBestTime) {
+                message += " equal ";
             } else {
-                if (newTime < m_bestTime) {
-                    message += " lower ";
-                } else if (newTime == m_bestTime) {
-                    message += " equal ";
-                } else {
-                    message += " higher ";
-                }
-                message += "time: " + Text::FormatInt(newTime);
+                message += " higher ";
             }
+            message += "time: " + Text::FormatInt(newTime);
 
             m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + newTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
             
             m_bestTime = newTime;
+
+            // check if best time ever was driven
+            if (m_bestTime < m_bestTimeEver) {
+                m_bestTimeEver = m_bestTime;
+            }
+
             print(message, Severity::Success);
             response.Decision = BFEvaluationDecision::Accept;
             return;
         }
 
-        if (tickTime > (m_customStopTimeDelta != 0.0 ? (int(m_customStopTimeDelta) + m_bestTime) : int(m_bestTime))) {
+        if (tickTime > maxTimeLimit) {
             response.Decision = BFEvaluationDecision::Reject;
             return;
         }
@@ -121,6 +155,7 @@ namespace NormalFin {
 
 namespace PreciseFin {
     double bestPreciseTime; // best precise time the bf found so far
+    double bestPreciseTimeEver; // keeps track for the best precise time ever reached, useful for bf that allows for worse times to be found
     bool isEstimating = false;
     uint64 coeffMin = 0;
     uint64 coeffMax = 18446744073709551615; 
@@ -130,7 +165,12 @@ namespace PreciseFin {
         bool raceFinished = simManager.PlayerInfo.RaceFinished;
         int tickTime = simManager.TickTime;
 
-        if (raceFinished || (tickTime > (m_customStopTimeDelta != 0.0 ? (int(m_customStopTimeDelta) + m_bestTime) : m_bestTime))) {
+        int maxTimeLimit = m_bestTime;
+        if (m_customStopTimeDelta != 0.0) {
+            maxTimeLimit += int(m_customStopTimeDelta);
+        }
+
+        if (raceFinished || (tickTime > maxTimeLimit)) {
             response.Decision = BFEvaluationDecision::Accept;
             return;
         }
@@ -142,9 +182,15 @@ namespace PreciseFin {
         bool raceFinished = simManager.PlayerInfo.RaceFinished;
         int tickTime = simManager.TickTime;
 
+        // see previous usages of this variable for more info
+        int maxTimeLimit = m_bestTime;
+        if (m_customStopTimeDelta != 0.0) {
+            maxTimeLimit += int(m_customStopTimeDelta);
+        }
+
         if (!PreciseFin::isEstimating) {
             if (!raceFinished) {
-                if (tickTime > (m_customStopTimeDelta != 0.0 ? (int(m_customStopTimeDelta) + m_bestTime) : m_bestTime)) {
+                if (tickTime > maxTimeLimit) {
                     response.Decision = BFEvaluationDecision::Reject;
                     return;
                 }
@@ -184,32 +230,53 @@ namespace PreciseFin {
         PreciseFin::coeffMin = 0;
         PreciseFin::coeffMax = 18446744073709551615;
 
-        double preciseTime = (simManager.RaceTime / 1000.0) + (currentCoeffPercentage / 100.0);
-        double previousTime = PreciseFin::bestPreciseTime;
+        double foundPreciseTime = (simManager.RaceTime / 1000.0) + (currentCoeffPercentage / 100.0);
+        double previousBestPreciseTime = PreciseFin::bestPreciseTime;
 
-        if (preciseTime >= (m_customStopTimeDelta > 0.0 ? (previousTime + (m_customStopTimeDelta / 1000.0)) : previousTime)) {
+        // see previous usages of this variable for more info (maxTimeLimit)
+        double maxPreciseTimeLimit = previousBestPreciseTime;
+        if (m_customStopTimeDelta != 0.0) {
+            maxPreciseTimeLimit += (m_customStopTimeDelta / 1000.0);
+        }
+
+        if (foundPreciseTime >= maxPreciseTimeLimit) {
             response.Decision = BFEvaluationDecision::Reject;
             return;
         }
 
-        PreciseFin::bestPreciseTime = preciseTime;
+        // handle worse result acceptance probability
+        if (m_canAcceptWorseTimes && foundPreciseTime > previousBestPreciseTime) {
+            if (Math::Rand(0.0f, 1.0f) > m_worseResultAcceptanceProbability) {
+                response.Decision = BFEvaluationDecision::Reject;
+                return;
+            }
+        }
+
+
+        // anything below this point means we will accept the new time
+
+        PreciseFin::bestPreciseTime = foundPreciseTime;
         m_bestTime = int(Math::Floor(PreciseFin::bestPreciseTime * 100.0)) * 10;
 
-        string message = "Found";
-        // im just explicitly doing the if check against m_customStopTimeDelta to make more clear what is going on
-        if (m_customStopTimeDelta == 0.0) {
-            message += " lower precise time: " + DecimalFormatted(preciseTime, 16);
-        } else {
-            if (preciseTime < previousTime) {
-                message += " lower ";
-            } else if (preciseTime == previousTime) {
-                message += " equal ";
-            } else {
-                message += " higher ";
-            }
-            message += "precise time: " + DecimalFormatted(preciseTime, 16);
+        // check if best time ever was driven
+        if (PreciseFin::bestPreciseTime < PreciseFin::bestPreciseTimeEver) {
+            PreciseFin::bestPreciseTimeEver = PreciseFin::bestPreciseTime;
         }
-        
+        if (m_bestTime < m_bestTimeEver) {
+            m_bestTimeEver = m_bestTime;
+        }
+
+        // higher or equal can only occur if settings are set up in such a way that worse (or equal) times are allowed to be found
+        string message = "Found";
+        if (foundPreciseTime < previousBestPreciseTime) {
+            message += " lower ";
+        } else if (foundPreciseTime == previousBestPreciseTime) {
+            message += " equal ";
+        } else {
+            message += " higher ";
+        }
+        message += "precise time: " + DecimalFormatted(foundPreciseTime, 16);
+    
         m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + m_bestTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
 
         print(message, Severity::Success);
@@ -223,6 +290,7 @@ void SetBruteforceVariables() {
 
     // General Variables
     m_bestTime = simManager.EventsDuration; // original time of the replay
+    m_bestTimeEver = m_bestTime;
 
     m_iterations = 0;
     m_iterationsCounter = 0;
@@ -234,6 +302,8 @@ void SetBruteforceVariables() {
     PreciseFin::coeffMin = 0;
     PreciseFin::coeffMax = 18446744073709551615;
     PreciseFin::bestPreciseTime = double(m_bestTime + 10) / 1000.0; // best precise time the bf found so far
+    // PreciseFin helper variables
+    PreciseFin::bestPreciseTimeEver = PreciseFin::bestPreciseTime;
 
     // Bruteforce Variables
     m_resultFileName = GetVariableString("kim_bf_result_file_name");
@@ -243,11 +313,9 @@ void SetBruteforceVariables() {
     m_useFillMissingInputsSteering = GetVariableBool("kim_bf_use_fill_missing_inputs_steering");
     m_useFillMissingInputsAcceleration = GetVariableBool("kim_bf_use_fill_missing_inputs_acceleration");
     m_useFillMissingInputsBrake = GetVariableBool("kim_bf_use_fill_missing_inputs_brake");
-    
-    m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + m_bestTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
 }
 
-// settings that can be changed during simulation
+// general settings that can be updated during our outside of bruteforce and can be called at any point in time
 void UpdateSettings() {
     SimulationManager@ simManager = m_Manager.m_simManager;
 
@@ -339,9 +407,19 @@ void UpdateSettings() {
         m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + m_bestTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
     }
 
+    // accept worse times chance
+    m_worseResultAcceptanceProbability = Math::Clamp(float(GetVariableDouble("kim_bf_worse_result_acceptance_probability")), 0.00000001f, 1.0f);
+
     // logging
     m_useInfoLogging = GetVariableBool("kim_bf_use_info_logging");
     m_useIterLogging = GetVariableBool("kim_bf_use_iter_logging");
+
+
+
+    /* helper vars */
+
+    // specify any conditions that could lead to a worse time here
+    m_canAcceptWorseTimes = m_customStopTimeDelta > 0.0;
 }
 
 /* SIMULATION MANAGEMENT */
@@ -390,8 +468,8 @@ class BruteforceController {
         m_simManager.InputEvents.RemoveAt(m_simManager.InputEvents.Length - 1);
         
         // handle variables 
-        UpdateSettings(); // variables for bruteforce handlers
-        SetBruteforceVariables(); // variables for bruteforce
+        SetBruteforceVariables();
+        UpdateSettings();
 
         // one time variables that cannot be changed during simulation
         FillMissingInputs(simManager);
@@ -787,7 +865,7 @@ class BruteforceController {
         }
 
         if (m_originalSimulationStates[m_originalSimulationStates.Length-1].PlayerInfo.RaceTime < int(m_rewindIndex * 10)) {
-            print("[AS] Rewind time is higher than highest saved simulation state, this can happen when custom stop time is > 0 and inputs were generated that occurred beyond the finish time that was driven during the initial phase. RandomNeighbour will be called again. If this keeps happening, lower the custom stop time.", Severity::Warning);
+            print("[AS] Rewind time is higher than highest saved simulation state, this can happen when custom stop time delta is > 0.0 and inputs were generated that occurred beyond the finish time that was driven during the initial phase. RandomNeighbour will be called again. If this keeps happening, lower the custom stop time.", Severity::Warning);
             RandomNeighbour();
         }
 
@@ -816,9 +894,21 @@ class BruteforceController {
                 }
 
                 // save to file
-                m_commandList.Content = simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
                 // m_commandList.Content = simManager.InputEvents.ToCommandsText();
-                m_commandList.Save(m_resultFileName);
+                // only save if the time we found is the best time ever, currently also saves when an equal time was found and accepted
+                if (!m_usePreciseTime) {
+                    if (m_bestTime == m_bestTimeEver) {
+                        m_commandList.Content = "# Found time: " + m_bestTime + ", iterations: " + m_iterations + "\n";
+                        m_commandList.Content += simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
+                        m_commandList.Save(m_resultFileName);
+                    }
+                } else {
+                    if (PreciseFin::bestPreciseTime == PreciseFin::bestPreciseTimeEver) {
+                        m_commandList.Content = "# Found precise time: " + DecimalFormatted(PreciseFin::bestPreciseTime, 16) + ", iterations: " + m_iterations + "\n";
+                        m_commandList.Content += simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
+                        m_commandList.Save(m_resultFileName);
+                    }
+                }
 
                 m_originalInputEvents.Clear();
                 StartInitialPhase();
@@ -1340,8 +1430,19 @@ void BruteforceSettingsWindow() {
             m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + m_bestTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
         }
     }
+
+    UI::TextDimmed("Allow the car to drive until +/- the current best time of the bruteforce. Example: Set it to -0.05 and it will only find improvements that are atleast 0.05 sec better than the current best time. Set it to +0.05 to accept times that are up to 0.05 sec worse, for example if you force finished and need to reach the finish again. \nExtra note: This input field only allows 3 decimals, but you can still write down more precision, the value next to it shows the actual value that will be used.");
+    UI::PopItemWidth();
     
-    UI::TextDimmed("Allow the car to drive until +/- the current best time during bruteforce. Example: Set it to -0.05 and it will only find improvements that are 0.05 sec better than the current best time. Set it to +0.05 if you force finished and you need to reach the finish line again.\nExtra note: This input field only allows 3 decimals, but you can still write down more precision, the value next to it shows the actual value that will be used.");
+    UI::Dummy(vec2(0, 15));
+    UI::Separator();
+    UI::Dummy(vec2(0, 15));
+
+    // kim_bf_worse_result_acceptance_probability
+    UI::PushItemWidth(180);
+    m_worseResultAcceptanceProbability = Math::Clamp(UI::SliderFloatVar("Worse Result Acceptance Probability", "kim_bf_worse_result_acceptance_probability", 0.00000001f, 1.0f, "%.8f"), 0.00000001f, 1.0f);
+    SetVariable("kim_bf_worse_result_acceptance_probability", m_worseResultAcceptanceProbability);
+    UI::TextDimmed("This will only be used for scenarios where a worse time can be driven and also get accepted, for example if the custom override delta time is positive");
     UI::PopItemWidth();
     
     UI::Dummy(vec2(0, 15));
@@ -1358,11 +1459,14 @@ void BruteforceSettingsWindow() {
 
     UI::TextDimmed("This stupidly prints to console every 200 iterations at the moment");
 
+
+    // specify any conditions that could lead to a worse time here
+    m_canAcceptWorseTimes = m_customStopTimeDelta > 0.0;
 }
 
 void Main() {
     @m_Manager = Manager();
-
+    
     RegisterVariable("kim_bf_result_file_name", "result.txt");
 
     RegisterVariable("kim_bf_target", "finish"); // finish, cp, trigger (only finish implemented atm)
@@ -1406,6 +1510,8 @@ void Main() {
     RegisterVariable("kim_bf_use_info_logging", true);
     RegisterVariable("kim_bf_use_iter_logging", true);
 
+    RegisterVariable("kim_bf_worse_result_acceptance_probability", 1.0f);
+
     UpdateSettings();
 
     RegisterValidationHandler("kim_bf_controller", "[AS] Kim's Bruteforce Controller", BruteforceSettingsWindow);
@@ -1415,7 +1521,7 @@ PluginInfo@ GetPluginInfo() {
     auto info = PluginInfo();
     info.Name = "Kim's Bruteforce Controller";
     info.Author = "Kim";
-    info.Version = "v1.0.0";
+    info.Version = "v1.1.0";
     info.Description = "General bruteforcing capabilities";
     return info;
 }
