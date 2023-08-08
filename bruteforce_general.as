@@ -4,12 +4,18 @@ const array<string> modifyTypes = { "amount", "percentage" };
 
 Manager @m_Manager;
 
+// _the_ var
+bool m_useLiveDebugging = false;
+
 // bruteforce vars
 int m_bestTime; // best time the bf found so far, precise or not
 
 // helper vars
+bool m_wasBaseRunFound = false;
 int m_bestTimeEver; // keeps track for the best time ever reached, useful for bf that allows for worse times to be found
 bool m_canAcceptWorseTimes = false; // will become true if settings are set that allow for worse times to be found
+bool m_customStopTimeDeltaIsIgnored = false; // used for m_customStopTimeDeltaUseOnlyOnce, will become true after the first time the custom stop time delta was used
+
 
 // settings vars
 string m_resultFileName;
@@ -55,6 +61,8 @@ bool m_useFillMissingInputsSteering;
 bool m_useFillMissingInputsAcceleration;
 bool m_useFillMissingInputsBrake;
 
+// specifies whether the stop time delta should only apply once for bruteforce and from that point on the stop time delta is ignored or if it should always use the stop time delta
+bool m_customStopTimeDeltaUseOnlyOnce;
 // todo: make the typing of this var less not good
 double m_customStopTimeDelta;
 
@@ -103,17 +111,49 @@ namespace NormalTime {
                 targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.PreviousState.Location.Position);
                 break;
         }
-
+        
         // car is allowed to drive until this time (exclusive). this value serves as a way to set a time limit for the simple reason that
         // we cannot wait for an infinite amount of time, and has nothing to do with the fact whether or not we end up with better/worse time
         // or if we want to accept or not accept better/worse times.
         int maxTimeLimit = m_bestTime;
-        if (m_customStopTimeDelta != 0.0) {
+        if (!m_customStopTimeDeltaIsIgnored) {
             maxTimeLimit += int(m_customStopTimeDelta);
         }
 
-        if (targetReached || (tickTime > maxTimeLimit)) {
-            m_bestTime = tickTime - 10;
+        if (targetReached) {
+            if (!m_wasBaseRunFound) {
+                print("[Initial phase] Found new base run with time: " +  (tickTime-10) + " sec", Severity::Success);
+                m_wasBaseRunFound = true;
+                m_bestTime = tickTime - 10;
+                
+                // check if best time ever was driven
+                if (m_bestTime < m_bestTimeEver) {
+                    m_bestTimeEver = m_bestTime;
+                    m_Manager.m_bfController.SaveSolutionToFile();
+                }
+            }
+
+            if (m_customStopTimeDeltaUseOnlyOnce && !m_customStopTimeDeltaIsIgnored) {
+                m_customStopTimeDeltaIsIgnored = true;
+                // TODO: the variable below needs to be updated in more automatic ways
+                m_canAcceptWorseTimes = m_canAcceptWorseTimes && (m_customStopTimeDelta <= 0.0);
+            }
+
+            response.Decision = BFEvaluationDecision::Accept;
+            return;
+        }
+
+        if (tickTime > maxTimeLimit) {
+            if (!m_wasBaseRunFound) {
+                print("[Initial phase] Base run did not reach target, starting search for a base run..", Severity::Info);
+            } else {
+                // initial usually can only not reach the target once, and future initial phases will hit it, however i decided that if one were to change
+                // the position of the trigger during bruteforce, the target may not be reached anymore in initial phase, so we will allow the bruteforce
+                // to find yet another base run again
+                print("[Initial phase] Base run could not reach a target anymore, despite previously having reached it. Some bruteforcing condition must have changed. Starting search for a base run..", Severity::Info);
+                m_wasBaseRunFound = false;
+            }
+            
             response.Decision = BFEvaluationDecision::Accept;
             return;
         }
@@ -139,7 +179,7 @@ namespace NormalTime {
 
         // see previous usages of this variable for more info
         int maxTimeLimit = m_bestTime;
-        if (m_customStopTimeDelta != 0.0) {
+        if (!m_customStopTimeDeltaIsIgnored) {
             maxTimeLimit += int(m_customStopTimeDelta);
         }
 
@@ -161,28 +201,40 @@ namespace NormalTime {
             }
 
             // anything below this point means we will accept the new time
-
-            string message = "Found";
-            // higher or equal can only occur if settings are set up in such a way that worse (or equal) times are allowed to be found
-            if (newTime < previousBestTime) {
-                message += " lower ";
-            } else if (newTime == previousBestTime) {
-                message += " equal ";
-            } else {
-                message += " higher ";
+            
+            if (m_customStopTimeDeltaUseOnlyOnce && !m_customStopTimeDeltaIsIgnored) {
+                m_customStopTimeDeltaIsIgnored = true;
+                // TODO: this variable below needs to be updated in more automatic ways
+                m_canAcceptWorseTimes = m_canAcceptWorseTimes && (m_customStopTimeDelta <= 0.0);
             }
-            message += "time: " + Text::FormatInt(newTime);
-
-            m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + newTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
+            
+            if (!m_wasBaseRunFound) {
+                print("[Search phase] Found new base run with time: " +  newTime + " sec", Severity::Success);
+                m_wasBaseRunFound = true;
+            } else {
+                string message = "[AS] Found";
+                // higher or equal can only occur if settings are set up in such a way that worse (or equal) times are allowed to be found
+                if (newTime < previousBestTime) {
+                    message += " lower ";
+                } else if (newTime == previousBestTime) {
+                    message += " equal ";
+                } else {
+                    message += " higher ";
+                }
+                message += "time: " + Text::FormatInt(newTime);
+                print(message, Severity::Success);
+            }
             
             m_bestTime = newTime;
 
             // check if best time ever was driven
             if (m_bestTime < m_bestTimeEver) {
                 m_bestTimeEver = m_bestTime;
+                m_Manager.m_bfController.SaveSolutionToFile();
             }
 
-            print(message, Severity::Success);
+            m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + newTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
+
             response.Decision = BFEvaluationDecision::Accept;
             return;
         }
@@ -219,12 +271,45 @@ namespace PreciseTime {
         }
 
         int maxTimeLimit = m_bestTime;
-        if (m_customStopTimeDelta != 0.0) {
+        if (!m_customStopTimeDeltaIsIgnored) {
             maxTimeLimit += int(m_customStopTimeDelta);
         }
 
-        if (targetReached || (tickTime > maxTimeLimit)) {
-            m_bestTime = tickTime - 10;
+        if (targetReached) {
+            if (!m_wasBaseRunFound) {
+                print("[Initial phase] Found new base run with time: " +  (tickTime-10) + " sec", Severity::Success);
+                m_wasBaseRunFound = true;
+                m_bestTime = tickTime - 10;
+                PreciseTime::bestPreciseTime = (m_bestTime / 1000.0) + 0.01;
+                
+                // check if best time ever was driven
+                if (m_bestTime < m_bestTimeEver) {
+                    m_bestTimeEver = m_bestTime;
+                    m_Manager.m_bfController.SaveSolutionToFile();
+                }
+            }
+
+            if (m_customStopTimeDeltaUseOnlyOnce && !m_customStopTimeDeltaIsIgnored) {
+                m_customStopTimeDeltaIsIgnored = true;
+                // TODO: the variable below needs to be updated in more automatic ways
+                m_canAcceptWorseTimes = m_canAcceptWorseTimes && (m_customStopTimeDelta <= 0.0);
+            }
+
+            response.Decision = BFEvaluationDecision::Accept;
+            return;
+        }
+
+        if (tickTime > maxTimeLimit) {
+            if (!m_wasBaseRunFound) {
+                print("[Initial phase] Base run did not reach target, starting search for a base run..", Severity::Info);
+            } else {
+                // initial usually can only not reach the target once, and future initial phases will hit it, however i decided that if one were to change
+                // the position of the trigger during bruteforce, the target may not be reached anymore in initial phase, so we will allow the bruteforce
+                // to find yet another base run again
+                print("[Initial phase] Base run could not reach a target anymore, despite previously having reached it. Some bruteforcing condition must have changed. Starting search for a base run..", Severity::Info);
+                m_wasBaseRunFound = false;
+            }
+            
             response.Decision = BFEvaluationDecision::Accept;
             return;
         }
@@ -250,7 +335,7 @@ namespace PreciseTime {
 
         // see previous usages of this variable for more info
         int maxTimeLimit = m_bestTime;
-        if (m_customStopTimeDelta != 0.0) {
+        if (!m_customStopTimeDeltaIsIgnored) {
             maxTimeLimit += int(m_customStopTimeDelta);
         }
 
@@ -301,7 +386,7 @@ namespace PreciseTime {
 
         // see previous usages of this variable for more info (maxTimeLimit)
         double maxPreciseTimeLimit = previousBestPreciseTime;
-        if (m_customStopTimeDelta != 0.0) {
+        if (!m_customStopTimeDeltaIsIgnored) {
             maxPreciseTimeLimit += (m_customStopTimeDelta / 1000.0);
         }
 
@@ -318,34 +403,45 @@ namespace PreciseTime {
             }
         }
 
-
         // anything below this point means we will accept the new time
+
+        if (m_customStopTimeDeltaUseOnlyOnce && !m_customStopTimeDeltaIsIgnored) {
+            m_customStopTimeDeltaIsIgnored = true;
+            // TODO: this variable below needs to be updated in more automatic ways
+            m_canAcceptWorseTimes = m_canAcceptWorseTimes && (m_customStopTimeDelta <= 0.0);
+        }
+
+        if (!m_wasBaseRunFound) {
+            print("[Search phase] Found new base run with precise time: " +  DecimalFormatted(foundPreciseTime, 16) + " sec", Severity::Success);
+            m_wasBaseRunFound = true;
+        } else {
+            string message = "[AS] Found";
+            // higher or equal can only occur if settings are set up in such a way that worse (or equal) times are allowed to be found
+            if (foundPreciseTime < previousBestPreciseTime) {
+                message += " lower ";
+            } else if (foundPreciseTime == previousBestPreciseTime) {
+                message += " equal ";
+            } else {
+                message += " higher ";
+            }
+            message += "precise time: " + DecimalFormatted(foundPreciseTime, 16);
+            print(message, Severity::Success);
+        }
 
         PreciseTime::bestPreciseTime = foundPreciseTime;
         m_bestTime = int(Math::Floor(PreciseTime::bestPreciseTime * 100.0)) * 10;
-
+            
         // check if best time ever was driven
         if (PreciseTime::bestPreciseTime < PreciseTime::bestPreciseTimeEver) {
             PreciseTime::bestPreciseTimeEver = PreciseTime::bestPreciseTime;
+            m_Manager.m_bfController.SaveSolutionToFile();
         }
         if (m_bestTime < m_bestTimeEver) {
             m_bestTimeEver = m_bestTime;
         }
 
-        // higher or equal can only occur if settings are set up in such a way that worse (or equal) times are allowed to be found
-        string message = "Found";
-        if (foundPreciseTime < previousBestPreciseTime) {
-            message += " lower ";
-        } else if (foundPreciseTime == previousBestPreciseTime) {
-            message += " equal ";
-        } else {
-            message += " higher ";
-        }
-        message += "precise time: " + DecimalFormatted(foundPreciseTime, 16);
-    
         m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + m_bestTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
 
-        print(message, Severity::Success);
         response.Decision = BFEvaluationDecision::Accept;
     }
 }
@@ -494,6 +590,9 @@ void UpdateSettings() {
     // modify only existing inputs
     // m_modifyOnlyExistingInputs = GetVariableBool("kim_bf_modify_only_existing_inputs");
 
+    // use custom stop time delta only once
+    bool previousCustomStopTimeDeltaUseOnlyOnce = m_customStopTimeDeltaUseOnlyOnce;
+    m_customStopTimeDeltaUseOnlyOnce = GetVariableBool("kim_bf_custom_stop_time_delta_use_only_once");
     // custom stop time delta
     m_customStopTimeDelta = GetVariableDouble("kim_bf_custom_stop_time_delta");
 	if (!m_usePreciseTime) {
@@ -501,6 +600,10 @@ void UpdateSettings() {
 	} else {
 		m_customStopTimeDelta = double(m_customStopTimeDelta * 1000.0);
 	}
+    // check if the m_customStopTimeDeltaUseOnlyOnce value has changed
+    if (previousCustomStopTimeDeltaUseOnlyOnce != m_customStopTimeDeltaUseOnlyOnce) {
+        m_customStopTimeDeltaIsIgnored = false;
+    }
 
     if (@simManager != null && m_Manager.m_bfController.active) {
         m_Manager.m_simManager.SetSimulationTimeLimit(int(m_customStopTimeDelta) + m_bestTime + 10010); // i add 10010 because tmi subtracts 10010 and it seems to be wrong. (also dont confuse this with the other value of 100010, thats something else)
@@ -519,6 +622,9 @@ void UpdateSettings() {
 
     // specify any conditions that could lead to a worse time here
     m_canAcceptWorseTimes = m_customStopTimeDelta > 0.0;
+
+
+    m_useLiveDebugging = GetVariableBool("kim_bf_use_live_debugging");
 }
 
 /* SIMULATION MANAGEMENT */
@@ -527,9 +633,10 @@ class BruteforceController {
     BruteforceController() {}
     ~BruteforceController() {}
 
-    // variables that bruteforce needs to work and cannot be changed during simulation
+    // reset variables bruteforce needs
     void SetBruteforceVariables(SimulationManager@ simManager) {
         // General Variables
+        m_wasBaseRunFound = false;
         m_bestTime = simManager.EventsDuration; // original time of the replay
         m_bestTimeEver = m_bestTime;
 
@@ -560,7 +667,7 @@ class BruteforceController {
         } else if (m_target == "trigger") {
             m_targetType = TargetType::Trigger;
         } else {
-            print("Invalid bruteforce target: " + m_target + ", stopping bruteforce..", Severity::Error);
+            print("[AS] Invalid bruteforce target: " + m_target + ", stopping bruteforce..", Severity::Error);
             OnSimulationEnd(simManager);
             return;
         }
@@ -577,7 +684,7 @@ class BruteforceController {
             {
                 uint checkpointCount = simManager.PlayerInfo.Checkpoints.Length;
                 if (targetId > checkpointCount) {
-                    print("Checkpoint with target id " + targetId + " does not exist on this map, change the target id in settings to fix this issue. stopping bruteforce..", Severity::Error);
+                    print("[AS] Checkpoint with target id " + targetId + " does not exist on this map, change the target id in settings to fix this issue. stopping bruteforce..", Severity::Error);
                     OnSimulationEnd(simManager);
                     return;
                 }
@@ -587,13 +694,13 @@ class BruteforceController {
             {
                 uint triggerCount = GetTriggerIds().Length;
                 if (triggerCount == 0) {
-                    print("Cannot bruteforce for trigger target, no triggers were found. stopping bruteforce..", Severity::Error);
+                    print("[AS] Cannot bruteforce for trigger target, no triggers were found. stopping bruteforce..", Severity::Error);
                     OnSimulationEnd(simManager);
                     return;
                 }
                 // if too high target id is specified, set to highest poss
                 if (targetId > triggerCount) {
-                    print("Trigger with target id " + targetId + " does not exist, change the target id in settings to fix this issue. stopping bruteforce..", Severity::Error);
+                    print("[AS] Trigger with target id " + targetId + " does not exist, change the target id in settings to fix this issue. stopping bruteforce..", Severity::Error);
                     OnSimulationEnd(simManager);
                     return;
                 }
@@ -604,9 +711,14 @@ class BruteforceController {
         m_targetId = targetId;
 
 
+        // fill missing inputs
         m_useFillMissingInputsSteering = GetVariableBool("kim_bf_use_fill_missing_inputs_steering");
         m_useFillMissingInputsAcceleration = GetVariableBool("kim_bf_use_fill_missing_inputs_acceleration");
         m_useFillMissingInputsBrake = GetVariableBool("kim_bf_use_fill_missing_inputs_brake");
+
+
+        // for m_customStopTimeDelta / m_customStopTimeDeltaUseOnlyOnce
+        m_customStopTimeDeltaIsIgnored = false;
     }
     
     void StartInitialPhase() {
@@ -1271,23 +1383,6 @@ class BruteforceController {
                     break;
                 }
 
-                // save to file
-                // m_commandList.Content = simManager.InputEvents.ToCommandsText();
-                // only save if the time we found is the best time ever, currently also saves when an equal time was found and accepted
-                if (!m_usePreciseTime) {
-                    if (m_bestTime == m_bestTimeEver) {
-                        m_commandList.Content = "# Found time: " + m_bestTime + ", iterations: " + m_iterations + "\n";
-                        m_commandList.Content += simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
-                        m_commandList.Save(m_resultFileName);
-                    }
-                } else {
-                    if (PreciseTime::bestPreciseTime == PreciseTime::bestPreciseTimeEver) {
-                        m_commandList.Content = "# Found precise time: " + DecimalFormatted(PreciseTime::bestPreciseTime, 16) + ", iterations: " + m_iterations + "\n";
-                        m_commandList.Content += simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
-                        m_commandList.Save(m_resultFileName);
-                    }
-                }
-
                 m_originalInputEvents.Clear();
                 StartInitialPhase();
                 break;
@@ -1364,6 +1459,24 @@ class BruteforceController {
         }
 
         return response;
+    }
+
+    void SaveSolutionToFile() {
+        // m_commandList.Content = simManager.InputEvents.ToCommandsText();
+        // only save if the time we found is the best time ever, currently also saves when an equal time was found and accepted
+        if (!m_usePreciseTime) {
+            if (m_bestTime == m_bestTimeEver) {
+                m_commandList.Content = "# Found time: " + m_bestTime + ", iterations: " + m_iterations + "\n";
+                m_commandList.Content += m_Manager.m_simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
+                m_commandList.Save(m_resultFileName);
+            }
+        } else {
+            if (PreciseTime::bestPreciseTime == PreciseTime::bestPreciseTimeEver) {
+                m_commandList.Content = "# Found precise time: " + DecimalFormatted(PreciseTime::bestPreciseTime, 16) + ", iterations: " + m_iterations + "\n";
+                m_commandList.Content += m_Manager.m_simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
+                m_commandList.Save(m_resultFileName);
+            }
+        }
     }
 
     // informational functions
@@ -1892,11 +2005,29 @@ void BruteforceSettingsWindow() {
     UI::Separator();
     UI::Dummy(vec2(0, 15));
 
-    // custom stop time
+    /* custom stop time */
     UI::PushItemWidth(180);
-    // i use InputFloatVar because InputTimeVar doesn't allow for negative values
+    // m_customStopTimeDeltaUseOnlyOnce
+    if (!m_useLiveDebugging || !m_Manager.m_bfController.active) {
+        bool previousCustomStopTimeDeltaUseOnlyOnce = m_customStopTimeDeltaUseOnlyOnce;
+        m_customStopTimeDeltaUseOnlyOnce = UI::CheckboxVar("Use Custom Stop Time Delta Only Once", "kim_bf_custom_stop_time_delta_use_only_once");
+        // helper var for m_customStopTimeDeltaUseOnlyOnce
+        if (previousCustomStopTimeDeltaUseOnlyOnce != m_customStopTimeDeltaUseOnlyOnce) {
+            // in either case we simply reset the m_customStopTimeDeltaIsIgnored value
+            m_customStopTimeDeltaIsIgnored = false;
+        }
+    } else {
+        // grey out by simulating with ✓ text
+        if (m_customStopTimeDeltaUseOnlyOnce) {
+            UI::Text("[✓] Use Custom Stop Time Delta Only Once");
+        } else {
+            UI::Text("[] Use Custom Stop Time Delta Only Once");
+        }
+    }
+    // m_customStopTimeDelta, i use InputFloatVar because InputTimeVar doesn't allow for negative values
     auto previousCustomStopTimeDelta = m_customStopTimeDelta;
     m_customStopTimeDelta = UI::InputFloatVar("##overridestoptime", "kim_bf_custom_stop_time_delta", 0.01f);
+    
     
     UI::SameLine();
     // sec to hundreds, round, and then * 10 to milliseconds to conform game time
@@ -1950,11 +2081,58 @@ void BruteforceSettingsWindow() {
 
     // specify any conditions that could lead to a worse time here
     m_canAcceptWorseTimes = m_customStopTimeDelta > 0.0;
+
+
+
+
+
+
+    /* START OF LIVE DEBUGGING */
+    UI::Dummy(vec2(0, 15));
+    UI::Separator();
+    UI::Dummy(vec2(0, 15));
+
+    UI::Text("Live Debugging");
+    UI::TextDimmed("This allows to view and control internal variables of the bruteforce while it is running. While debugging is turned on, access to certain settings variables will be disabled. This currently an early prototype and offers support only for the internal flag which checks if the custom stop time delta was reached once. What's the use case??? Figure it out yourself :) (Hint: lets just say changing permanent settings variables during bruteforce isn't always the best idea)");
+    UI::Dummy(vec2(0, 15));
+
+    m_useLiveDebugging = UI::CheckboxVar("Activate", "kim_bf_use_live_debugging");
+    if (!m_useLiveDebugging) {
+        return;
+    }
+
+    if (!m_Manager.m_bfController.active) {
+        UI::TextDimmed("Live Debugging is only available while the bruteforce is running.");
+        UI::Dummy(vec2(0, 15));
+        return;
+    }
+
+    
+    UI::Dummy(vec2(0, 30));
+
+    // control internal variables
+    UI::PushItemWidth(180);
+    UI::Text("m_customStopTimeDeltaIsIgnored: " + (m_customStopTimeDeltaIsIgnored ? "true" : "false"));
+    UI::SameLine();
+    if (UI::Button("Reset##m_customStopTimeDeltaIsIgnored", vec2(60, 0))) {
+        m_customStopTimeDeltaIsIgnored = false;
+    }
+
+
+    UI::Dummy(vec2(0, 15));
+    UI::Separator();
+    UI::Dummy(vec2(0, 15));
+
+
+
+
+
+
 }
 
 void Main() {
     @m_Manager = Manager();
-    
+
     RegisterVariable("kim_bf_result_file_name", "result.txt");
 
     RegisterVariable("kim_bf_target", targetNames[0]); // "finish" / "checkpoint" / "trigger"
@@ -2001,6 +2179,7 @@ void Main() {
     RegisterVariable("kim_bf_use_fill_missing_inputs_acceleration", false);
     RegisterVariable("kim_bf_use_fill_missing_inputs_brake", false);
 
+    RegisterVariable("kim_bf_custom_stop_time_delta_use_only_once", false);
     RegisterVariable("kim_bf_custom_stop_time_delta", 0.0);
 
     RegisterVariable("kim_bf_use_info_logging", true);
@@ -2008,6 +2187,8 @@ void Main() {
     RegisterVariable("kim_bf_logging_interval", 200.0);
 
     RegisterVariable("kim_bf_worse_result_acceptance_probability", 1.0f);
+
+    RegisterVariable("kim_bf_use_live_debugging", false);
 
     UpdateSettings();
 
@@ -2018,7 +2199,7 @@ PluginInfo@ GetPluginInfo() {
     auto info = PluginInfo();
     info.Name = "Kim's Bruteforce Controller";
     info.Author = "Kim";
-    info.Version = "v1.3.0";
+    info.Version = "v1.3.1";
     info.Description = "General bruteforcing capabilities";
     return info;
 }
