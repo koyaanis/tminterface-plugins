@@ -108,7 +108,7 @@ namespace NormalTime {
                 targetReached = simManager.PlayerInfo.CurCheckpointCount == m_Manager.m_bfController.m_targetId;
                 break;
             case TargetType::Trigger:
-                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.PreviousState.Location.Position);
+                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
                 break;
         }
         
@@ -150,7 +150,7 @@ namespace NormalTime {
                 // initial usually can only not reach the target once, and future initial phases will hit it, however i decided that if one were to change
                 // the position of the trigger during bruteforce, the target may not be reached anymore in initial phase, so we will allow the bruteforce
                 // to find yet another base run again
-                print("[Initial phase] Base run could not reach a target anymore, despite previously having reached it. Some bruteforcing condition must have changed. Starting search for a base run..", Severity::Info);
+                print("[Initial phase] Base run could not reach the target anymore, despite previously having reached it. Some bruteforcing condition must have changed. Starting search for a base run..", Severity::Info);
                 m_wasBaseRunFound = false;
             }
             
@@ -173,7 +173,7 @@ namespace NormalTime {
                 targetReached = simManager.PlayerInfo.CurCheckpointCount == m_Manager.m_bfController.m_targetId;
                 break;
             case TargetType::Trigger:
-                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.PreviousState.Location.Position);
+                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
                 break;
         }
 
@@ -306,7 +306,7 @@ namespace PreciseTime {
                 // initial usually can only not reach the target once, and future initial phases will hit it, however i decided that if one were to change
                 // the position of the trigger during bruteforce, the target may not be reached anymore in initial phase, so we will allow the bruteforce
                 // to find yet another base run again
-                print("[Initial phase] Base run could not reach a target anymore, despite previously having reached it. Some bruteforcing condition must have changed. Starting search for a base run..", Severity::Info);
+                print("[Initial phase] Base run could not reach the target anymore, despite previously having reached it. Some bruteforcing condition must have changed. Starting search for a base run..", Severity::Info);
                 m_wasBaseRunFound = false;
             }
             
@@ -2199,7 +2199,7 @@ PluginInfo@ GetPluginInfo() {
     auto info = PluginInfo();
     info.Name = "Kim's Bruteforce Controller";
     info.Author = "Kim";
-    info.Version = "v1.3.1";
+    info.Version = "v1.3.2";
     info.Description = "General bruteforcing capabilities";
     return info;
 }
