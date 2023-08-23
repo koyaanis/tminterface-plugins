@@ -79,13 +79,13 @@ uint m_iterationsCounter = 0; // iterations counter, used to update the iteratio
 float m_iterationsPerSecond = 0.0f; // iterations per second
 float m_lastIterationsPerSecondUpdate = 0.0f; // last time the iterations per second were updated
 
+
 /* enum definitions, because somehow we cant define enums inside a class */
 enum TargetType {
     Finish,
     Checkpoint,
     Trigger
-};
-
+}
 
 // helper functions
 string DecimalFormatted(float number, int precision = 10) {
@@ -108,8 +108,12 @@ namespace NormalTime {
                 targetReached = simManager.PlayerInfo.CurCheckpointCount == m_Manager.m_bfController.m_targetId;
                 break;
             case TargetType::Trigger:
-                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
+            {
+                Trigger3D trigger = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1);
+                // targetReached = trigger.ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
+                targetReached = IsColliding(simManager, trigger);
                 break;
+            }
         }
         
         // car is allowed to drive until this time (exclusive). this value serves as a way to set a time limit for the simple reason that
@@ -173,8 +177,12 @@ namespace NormalTime {
                 targetReached = simManager.PlayerInfo.CurCheckpointCount == m_Manager.m_bfController.m_targetId;
                 break;
             case TargetType::Trigger:
-                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
+            {
+                Trigger3D trigger = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1);
+                // targetReached = trigger.ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
+                targetReached = IsColliding(simManager, trigger);
                 break;
+            }
         }
 
         // see previous usages of this variable for more info
@@ -266,8 +274,12 @@ namespace PreciseTime {
                 targetReached = simManager.PlayerInfo.CurCheckpointCount == m_Manager.m_bfController.m_targetId;
                 break;
             case TargetType::Trigger:
-                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
+            {
+                Trigger3D trigger = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1);
+                // targetReached = trigger.ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
+                targetReached = IsColliding(simManager, trigger);
                 break;
+            }
         }
 
         int maxTimeLimit = m_bestTime;
@@ -329,8 +341,12 @@ namespace PreciseTime {
                 targetReached = simManager.PlayerInfo.CurCheckpointCount == m_Manager.m_bfController.m_targetId;
                 break;
             case TargetType::Trigger:
-                targetReached = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1).ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
+            {
+                Trigger3D trigger = GetTriggerByIndex(m_Manager.m_bfController.m_targetId - 1);
+                // targetReached = trigger.ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
+                targetReached = IsColliding(simManager, trigger);
                 break;
+            }
         }
 
         // see previous usages of this variable for more info
@@ -2130,6 +2146,7 @@ void BruteforceSettingsWindow() {
 
 }
 
+
 void Main() {
     @m_Manager = Manager();
 
@@ -2199,7 +2216,7 @@ PluginInfo@ GetPluginInfo() {
     auto info = PluginInfo();
     info.Name = "Kim's Bruteforce Controller";
     info.Author = "Kim";
-    info.Version = "v1.3.2";
+    info.Version = "v1.3.3";
     info.Description = "General bruteforcing capabilities";
     return info;
 }
