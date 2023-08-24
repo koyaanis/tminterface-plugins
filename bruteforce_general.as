@@ -785,6 +785,7 @@ class BruteforceController {
         m_phase = BFPhase::Initial;
         m_originalSimulationStates = array<SimulationState@>();
         m_originalInputEvents.Clear();
+        m_originalSimulationStates.Clear();
     }
 
     void OnSimulationEnd(SimulationManager@ simManager) {
@@ -794,7 +795,9 @@ class BruteforceController {
         print("[AS] Bruteforce finished");
         active = false;
 
-        m_originalSimulationStates = array<SimulationState@>();
+        m_originalInputEvents.Clear();
+        m_originalSimulationStates.Clear();
+
 
         // set the simulation time limit to make the game quit the simulation right away, or else we'll have to wait all the way until the end of the replay..
         simManager.SetSimulationTimeLimit(0.0);
