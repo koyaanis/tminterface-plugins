@@ -182,36 +182,22 @@ class TriggerMesh {
                 location.Mult(carLocation);
                 break;
             }
-            // wheel 1-3 is calculated manually because theres a bug and only FrontLeft is given back.
-            // the data is not correct since i only use the damperval of front left
             case 1:
             {
-                float damperAbsorbValue = simManager.Wheels.FrontLeft.RTState.DamperAbsorbVal;
-                GmVec3 translationFromCar(-0.863012f, 0.3525f, 1.782089f);
+                location.m_Position = simManager.Wheels.FrontRight.SurfaceHandler.Location.Position;
                 location.Mult(carLocation);
-                translationFromCar.Mult(carLocation.m_Rotation);
-                location.m_Position += translationFromCar;
-                location.m_Position.y -= damperAbsorbValue;
                 break;
             }
             case 2:
             {
-                float damperAbsorbValue = simManager.Wheels.FrontLeft.RTState.DamperAbsorbVal;
-                GmVec3 translationFromCar(0.885002f, 0.352504f, -1.205502f);
+                location.m_Position = simManager.Wheels.BackLeft.SurfaceHandler.Location.Position;
                 location.Mult(carLocation);
-                translationFromCar.Mult(carLocation.m_Rotation);
-                location.m_Position += translationFromCar;
-                location.m_Position.y -= damperAbsorbValue;
                 break;
             }
             case 3:
             {
-                float damperAbsorbValue = simManager.Wheels.FrontLeft.RTState.DamperAbsorbVal;
-                GmVec3 translationFromCar(-0.885002f, 0.352504f, -1.205502f);
+                location.m_Position = simManager.Wheels.BackRight.SurfaceHandler.Location.Position;
                 location.Mult(carLocation);
-                translationFromCar.Mult(carLocation.m_Rotation);
-                location.m_Position += translationFromCar;
-                location.m_Position.y -= damperAbsorbValue;
                 break;
             }
             case 4:
