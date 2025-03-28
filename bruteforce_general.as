@@ -1,5 +1,5 @@
 // constants
-const array<string> targetNames = { "finish", "checkpoint", "trigger" };
+const array<string> targetNames = { "finish", "checkpoint", "trigger", "point" };
 const array<string> modifyTypes = { "amount", "percentage" };
 
 Manager @m_Manager;
@@ -9,6 +9,15 @@ bool m_useLiveDebugging = false;
 
 // bruteforce vars
 int m_bestTime; // best time the bf found so far, precise or not
+// SinglePoint vars
+float m_bestSpeedKmh = -1.0f;
+float m_bestDistance = -1.0f;
+float m_bestSpeedKmhOld = -1.0f;
+float m_bestDistanceOld = -1.0f;
+vec3 m_targetPoint = vec3(0.0f, 0.0f, 0.0f);
+float m_targetPointRatio = 0.0f;
+int m_targetPointEvalMin = 0;
+int m_targetPointEvalMax = 0;
 
 // helper vars
 bool m_wasBaseRunFound = false;
@@ -53,6 +62,8 @@ uint m_modifyBrakeMaxHoldTime;
 
 uint m_modifySteeringMinDiff;
 uint m_modifySteeringMaxDiff;
+int m_modifySteeringMinRange;
+int m_modifySteeringMaxRange;
 
 // TODO: implement
 // bool m_modifyOnlyExistingInputs;
@@ -84,7 +95,8 @@ float m_lastIterationsPerSecondUpdate = 0.0f; // last time the iterations per se
 enum TargetType {
     Finish,
     Checkpoint,
-    Trigger
+    Trigger,
+    SinglePoint
 }
 
 // helper functions
@@ -113,6 +125,36 @@ namespace NormalTime {
                 // targetReached = trigger.ContainsPoint(simManager.Dyna.CurrentState.Location.Position);
                 targetReached = IsColliding(simManager, trigger);
                 break;
+            }
+            case TargetType::SinglePoint:
+            {
+                if (!m_wasBaseRunFound) {
+                    if (m_targetPointEvalMin <= tickTime && tickTime <= m_targetPointEvalMax) {
+                        vec3 carPos = simManager.Dyna.CurrentState.Location.Position;
+                        vec3 carVel = simManager.Dyna.CurrentState.LinearSpeed;
+    
+                        if (m_Manager.m_bfController.IsBetterDistanceSpeed(carPos, carVel)) {
+                            m_bestDistance = (carPos - m_targetPoint).Length();
+                            m_bestSpeedKmh = carVel.Length() * 3.6f;
+                        }
+                    }
+                }
+                
+                if (tickTime >= m_targetPointEvalMax) {
+                    if (!m_wasBaseRunFound) {
+                        print("[Initial phase] Found new base run with distance: " + DecimalFormatted(m_bestDistance, 16) + " m, speed: " + DecimalFormatted(m_bestSpeedKmh, 16) + " km/h", Severity::Success);
+                        m_wasBaseRunFound = true;
+                        
+                        m_bestDistanceOld = m_bestDistance;
+                        m_bestSpeedKmhOld = m_bestSpeedKmh;
+                    }
+
+                    response.Decision = BFEvaluationDecision::Accept;
+                    return;
+                }
+
+                response.Decision = BFEvaluationDecision::DoNothing;
+                return;
             }
         }
         
@@ -183,6 +225,37 @@ namespace NormalTime {
                 targetReached = IsColliding(simManager, trigger);
                 break;
             }
+            case TargetType::SinglePoint:
+            {
+                if (m_targetPointEvalMin <= tickTime && tickTime <= m_targetPointEvalMax) {
+                    vec3 carPos = simManager.Dyna.CurrentState.Location.Position;
+                    vec3 carVel = simManager.Dyna.CurrentState.LinearSpeed;
+
+                    if (m_Manager.m_bfController.IsBetterDistanceSpeed(carPos, carVel)) {
+                        m_bestDistance = (carPos - m_targetPoint).Length();
+                        m_bestSpeedKmh = carVel.Length() * 3.6f;
+                    }
+                }
+
+                if (tickTime >= m_targetPointEvalMax) {
+                    if (m_bestDistance != m_bestDistanceOld || m_bestSpeedKmh != m_bestSpeedKmhOld) {
+                        m_bestDistanceOld = m_bestDistance;
+                        m_bestSpeedKmhOld = m_bestSpeedKmh;
+                        
+                        print("[Search phase] Found new base run with distance: " + DecimalFormatted(m_bestDistance, 16) + " m, speed: " + DecimalFormatted(m_bestSpeedKmh, 16) + " km/h", Severity::Success);
+                        m_Manager.m_bfController.SaveSolutionToFile();
+
+                        response.Decision = BFEvaluationDecision::Accept;
+                        return;
+                    } else {
+                        response.Decision = BFEvaluationDecision::Reject;
+                        return;
+                    }
+                }
+
+                response.Decision = BFEvaluationDecision::DoNothing;
+                return;
+            }
         }
 
         // see previous usages of this variable for more info
@@ -251,6 +324,8 @@ namespace NormalTime {
             response.Decision = BFEvaluationDecision::Reject;
             return;
         }
+
+        response.Decision = BFEvaluationDecision::DoNothing;
     }
 }
 
@@ -478,6 +553,8 @@ void UpdateSettings() {
             m_Manager.m_bfController.m_targetType = TargetType::Checkpoint;
         } else if (m_Manager.m_bfController.m_target == "trigger") {
             m_Manager.m_bfController.m_targetType = TargetType::Trigger;
+        } else if (m_Manager.m_bfController.m_target == "point") {
+            m_Manager.m_bfController.m_targetType = TargetType::SinglePoint;
         } else {
             // reset it to finish if it was invalid
             m_Manager.m_bfController.m_target = targetNames[0];
@@ -502,6 +579,8 @@ void UpdateSettings() {
                     targetId = GetTriggerIds().Length;
                 }
                 break;
+            case TargetType::SinglePoint:
+                break;
         }
         m_Manager.m_bfController.m_targetId = targetId;
         SetVariable("kim_bf_target_id", targetId);
@@ -514,6 +593,21 @@ void UpdateSettings() {
 		m_preciseTimePrecision = uint(Math::Max(1, int(GetVariableDouble("kim_bf_precise_time_precision"))));
         SetVariable("kim_bf_precise_time_precision", m_preciseTimePrecision);
 	}
+
+    // target point
+    m_targetPoint = Text::ParseVec3(GetVariableString("kim_bf_target_point"));
+    m_targetPointRatio = float(GetVariableDouble("kim_bf_target_point_ratio"));
+    if (m_targetPointRatio < 0.0f) {
+        m_targetPointRatio = 0.0f;
+    } else if (m_targetPointRatio > 1.0f) {
+        m_targetPointRatio = 1.0f;
+    }
+    SetVariable("kim_bf_target_point_ratio", m_targetPointRatio);
+    m_targetPointEvalMin = uint(Math::Max(0, int(GetVariableDouble("kim_bf_target_point_eval_min"))));
+    m_targetPointEvalMax = uint(Math::Max(0, int(GetVariableDouble("kim_bf_target_point_eval_max"))));
+    m_targetPointEvalMin = Math::Min(m_targetPointEvalMin, m_targetPointEvalMax);
+    SetVariable("kim_bf_target_point_eval_min", m_targetPointEvalMin);
+    SetVariable("kim_bf_target_point_eval_max", m_targetPointEvalMax);
 
     // modify type
     m_modifyType = GetVariableString("kim_bf_modify_type");
@@ -602,6 +696,12 @@ void UpdateSettings() {
     SetVariable("kim_bf_modify_steering_min_diff", m_modifySteeringMinDiff);
     SetVariable("kim_bf_modify_steering_max_diff", m_modifySteeringMaxDiff);
 
+    // steering range
+    m_modifySteeringMinRange = int(Math::Clamp(int(GetVariableDouble("kim_bf_modify_steering_min_range")), -65536, 65536));
+    m_modifySteeringMaxRange = int(Math::Clamp(int(GetVariableDouble("kim_bf_modify_steering_max_range")), -65536, 65536));
+    m_modifySteeringMinRange = Math::Min(m_modifySteeringMinRange, m_modifySteeringMaxRange);
+    SetVariable("kim_bf_modify_steering_min_range", m_modifySteeringMinRange);
+
     // TODO: implement
     // modify only existing inputs
     // m_modifyOnlyExistingInputs = GetVariableBool("kim_bf_modify_only_existing_inputs");
@@ -682,6 +782,8 @@ class BruteforceController {
             m_targetType = TargetType::Checkpoint;
         } else if (m_target == "trigger") {
             m_targetType = TargetType::Trigger;
+        } else if (m_target == "point") {
+            m_targetType = TargetType::SinglePoint;
         } else {
             print("[AS] Invalid bruteforce target: " + m_target + ", stopping bruteforce..", Severity::Error);
             OnSimulationEnd(simManager);
@@ -722,10 +824,19 @@ class BruteforceController {
                 }
                 break;
             }
+            case TargetType::SinglePoint:
+                break;
         }
 
         m_targetId = targetId;
 
+        // target point
+        int targetPointEvalMaxPrevious = m_targetPointEvalMax;
+        m_targetPointEvalMax = Math::Min(simManager.EventsDuration, m_targetPointEvalMax);
+        if (targetPointEvalMaxPrevious != m_targetPointEvalMax) {
+            print("[AS] kim_bf_target_point_eval_max was higher than replay time, lowering it to replay time", Severity::Warning);
+        }
+        SetVariable("kim_bf_target_point_eval_max", m_targetPointEvalMax);
 
         // fill missing inputs
         m_useFillMissingInputsSteering = GetVariableBool("kim_bf_use_fill_missing_inputs_steering");
@@ -771,7 +882,7 @@ class BruteforceController {
         print("[AS] Starting bruteforce..");
 
         @m_simManager = simManager;
-
+        
         // knock off finish event from the input buffer
         m_simManager.InputEvents.RemoveAt(m_simManager.InputEvents.Length - 1);
         
@@ -929,7 +1040,21 @@ class BruteforceController {
         print(m_simManager.InputEvents.ToCommandsText(InputFormatFlags(3)));
     }
 
-    void RandomNeighbour() {
+    int GetMutatedSteeringValue(int val = 0) {
+        int diff = Math::Rand(m_modifySteeringMinDiff, m_modifySteeringMaxDiff);
+        val = Math::Clamp(val, m_modifySteeringMinRange, m_modifySteeringMaxRange);
+        int lowerBound = -Math::Min(val - m_modifySteeringMinRange, diff);
+        int upperBound = Math::Min(m_modifySteeringMaxRange - val, diff);
+        val += Math::Rand(lowerBound, upperBound);
+        return val;
+    }
+
+    void RandomNeighbour(uint numberCalls = 0) {
+        if (numberCalls >= 1000) {
+            print("[AS] RandomNeighbour did not modify any inputs after more than 1000 attempts, stopping bruteforce..", Severity::Warning);
+            OnSimulationEnd(m_simManager);
+        }
+
         TM::InputEventBuffer@ inputBuffer = m_simManager.InputEvents;
 
         /*        
@@ -988,7 +1113,7 @@ class BruteforceController {
                 // if there is no value at that time, add a new one
                 if (modifyIndex.Length == 0) {
                     // add a new value
-                    int newValue = Math::Rand(-m_modifySteeringMaxDiff/2, m_modifySteeringMaxDiff/2);
+                    int newValue = this.GetMutatedSteeringValue();
                     inputBuffer.Add(modifyTime, InputType::Steer, newValue);
                     
                     lowestTimeModified = Math::Min(lowestTimeModified, modifyTime);
@@ -1019,7 +1144,7 @@ class BruteforceController {
                 } else {
                     // if there is a value at that time, modify it
                     int oldSteerValue = inputBuffer[modifyIndex[0]].Value.Analog;
-                    int newValue = oldSteerValue + Math::Rand(-Math::Min(65536 + oldSteerValue, m_modifySteeringMaxDiff), Math::Min(65536 - oldSteerValue, m_modifySteeringMaxDiff));
+                    int newValue = this.GetMutatedSteeringValue(oldSteerValue);
                     inputBuffer[modifyIndex[0]].Value.Analog = newValue;
 
                     lowestTimeModified = Math::Min(lowestTimeModified, modifyTime);
@@ -1190,7 +1315,7 @@ class BruteforceController {
                 // if there is no value at that time, add a new one
                 if (modifyIndex.Length == 0) {
                     // add a new value
-                    int newValue = Math::Rand(-m_modifySteeringMaxDiff/2, m_modifySteeringMaxDiff/2);
+                    int newValue = this.GetMutatedSteeringValue();
                     inputBuffer.Add(modifyTime, InputType::Steer, newValue);
                     
                     lowestTimeModified = Math::Min(lowestTimeModified, modifyTime);
@@ -1220,7 +1345,7 @@ class BruteforceController {
                 } else {
                     // if there is a value at that time, modify it
                     int oldSteerValue = inputBuffer[modifyIndex[0]].Value.Analog;
-                    int newValue = oldSteerValue + Math::Rand(-Math::Min(65536 + oldSteerValue, m_modifySteeringMaxDiff), Math::Min(65536 - oldSteerValue, m_modifySteeringMaxDiff));
+                    int newValue = this.GetMutatedSteeringValue(oldSteerValue);
                     inputBuffer[modifyIndex[0]].Value.Analog = newValue;
 
                     lowestTimeModified = Math::Min(lowestTimeModified, modifyTime);
@@ -1367,7 +1492,13 @@ class BruteforceController {
             }
         }
 
-        if (lowestTimeModified == 0 || lowestTimeModified == 2147483647) {
+        // no modifcations were made, we call RandomNeighbour a few more times because its possible it will modify the next call
+        if (lowestTimeModified == 2147483647) {
+            RandomNeighbour(numberCalls+1);
+            return;
+        }
+
+        if (lowestTimeModified == 0) {
             m_rewindIndex = 0;
         } else {
             m_rewindIndex = lowestTimeModified / 10 - 1;
@@ -1375,9 +1506,8 @@ class BruteforceController {
 
         if (m_originalSimulationStates[m_originalSimulationStates.Length-1].PlayerInfo.RaceTime < int(m_rewindIndex * 10)) {
             print("[AS] Rewind time is higher than highest saved simulation state, this can happen when custom stop time delta is > 0.0 and inputs were generated that occurred beyond the finish time that was driven during the initial phase. RandomNeighbour will be called again. If this keeps happening, lower the custom stop time.", Severity::Warning);
-            RandomNeighbour();
+            RandomNeighbour(numberCalls+1);
         }
-
     }
 
     void OnSimulationStep(SimulationManager@ simManager) {
@@ -1480,20 +1610,52 @@ class BruteforceController {
         return response;
     }
 
+    bool IsBetterDistanceSpeed(vec3 carPos, vec3 carVel) {
+        if (m_Manager.m_bfController.m_phase == BFPhase::Initial) {
+            return true;
+        }
+
+        float carDistanceToPoint = (carPos - m_targetPoint).Length();
+        float carSpeedKmh = carVel.Length() * 3.6f;
+
+        if (carDistanceToPoint == m_bestDistance && carSpeedKmh == m_bestSpeedKmh) {
+            return false;
+        }
+        
+        float distanceDiff = carDistanceToPoint - m_bestDistance;
+        float speedDiff = carSpeedKmh - m_bestSpeedKmh;
+        
+        return speedDiff * m_targetPointRatio - distanceDiff * (1.0f - m_targetPointRatio) > 0;
+
+    }
+
     void SaveSolutionToFile() {
         // m_commandList.Content = simManager.InputEvents.ToCommandsText();
         // only save if the time we found is the best time ever, currently also saves when an equal time was found and accepted
-        if (!m_usePreciseTime) {
-            if (m_bestTime == m_bestTimeEver) {
-                m_commandList.Content = "# Found time: " + m_bestTime + ", iterations: " + m_iterations + "\n";
+
+        switch (m_Manager.m_bfController.m_targetType) {
+            case TargetType::SinglePoint:
+            {
+                m_commandList.Content = "# Found distance: " + DecimalFormatted(m_bestDistance) + ", speed: " + DecimalFormatted(m_bestSpeedKmh, 16) + ", iterations: " + m_iterations + "\n";
                 m_commandList.Content += m_Manager.m_simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
                 m_commandList.Save(m_resultFileName);
+                break;
             }
-        } else {
-            if (PreciseTime::bestPreciseTime == PreciseTime::bestPreciseTimeEver) {
-                m_commandList.Content = "# Found precise time: " + DecimalFormatted(PreciseTime::bestPreciseTime, 16) + ", iterations: " + m_iterations + "\n";
-                m_commandList.Content += m_Manager.m_simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
-                m_commandList.Save(m_resultFileName);
+            default:
+            {
+                if (!m_usePreciseTime) {
+                    if (m_bestTime == m_bestTimeEver) {
+                        m_commandList.Content = "# Found time: " + m_bestTime + ", iterations: " + m_iterations + "\n";
+                        m_commandList.Content += m_Manager.m_simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
+                        m_commandList.Save(m_resultFileName);
+                    }
+                } else {
+                    if (PreciseTime::bestPreciseTime == PreciseTime::bestPreciseTimeEver) {
+                        m_commandList.Content = "# Found precise time: " + DecimalFormatted(PreciseTime::bestPreciseTime, 16) + ", iterations: " + m_iterations + "\n";
+                        m_commandList.Content += m_Manager.m_simManager.InputEvents.ToCommandsText(InputFormatFlags(3));
+                        m_commandList.Save(m_resultFileName);
+                    }
+                }
             }
         }
     }
@@ -1629,9 +1791,7 @@ void BruteforceSettingsWindow() {
     UI::Dummy(vec2(0, 15));
 
     // m_target selectable
-    UI::PushItemWidth(120);
-    UI::Text("Target");
-    UI::SameLine();
+    UI::PushItemWidth(200);
     
     if (!m_Manager.m_bfController.active) {
         m_Manager.m_bfController.m_target = GetVariableString("kim_bf_target");
@@ -1650,6 +1810,9 @@ void BruteforceSettingsWindow() {
         UI::Text(m_Manager.m_bfController.m_target);
     }
 
+    UI::SameLine();
+    UI::Text("Target");
+    
     // if target is checkpoint or trigger, show index
     if (m_Manager.m_bfController.m_targetType == TargetType::Checkpoint || m_Manager.m_bfController.m_targetType == TargetType::Trigger) {
         UI::SameLine();
@@ -1684,30 +1847,82 @@ void BruteforceSettingsWindow() {
 
     UI::PopItemWidth();
 
-    
-    UI::Dummy(vec2(0, 15));
-    UI::Separator();
-    UI::Dummy(vec2(0, 15));
-    
-    // precise time checkbox
-    UI::PushItemWidth(180);
-    m_usePreciseTime = UI::CheckboxVar("##precisetimeenabled", "kim_bf_use_precise_time");
-    UI::SameLine();
-    UI::Text("Use precise time");
+    if (m_Manager.m_bfController.m_targetType == TargetType::SinglePoint) {
+        UI::PushItemWidth(200);
 
-    if (m_usePreciseTime) {
-        // precise time precision
-        UI::SameLine();
-        // TODO: inputintvar is not enough to accept 64 bit values
-        int preciseTimePrecision = UI::InputIntVar("##precisetimeprecision", "kim_bf_precise_time_precision", 1);
-        if (preciseTimePrecision < 1) {
-            preciseTimePrecision = 1;
-            SetVariable("kim_bf_precise_time_precision", 1);
+        m_targetPointRatio = UI::SliderFloatVar("Ratio", "kim_bf_target_point_ratio", 0.0f, 1.0f);
+        UI::Text("Distance                           Speed");
+
+        if (m_targetPointRatio > 0.0f && m_targetPointRatio <= 0.5f) {
+            UI::Text("This ratio means gaining 1m is worth sacrificing speed until " + ((1.0f - m_targetPointRatio) / m_targetPointRatio) + " m/s");
+        } else if (m_targetPointRatio > 0.5f && m_targetPointRatio < 1.0f) {
+            UI::Text("This ratio means gaining 1m/s is worth sacrificing distance until " + (m_targetPointRatio / (1.0f - m_targetPointRatio)) + " m");
         }
-        m_preciseTimePrecision = preciseTimePrecision;
+
+        
+        UI::PopItemWidth();
+
+        UI::Dummy(vec2(0, 15));
+
+        UI::PushItemWidth(260);
+
+        if (UI::DragFloat3Var("##kimbftargetpoint", "kim_bf_target_point", 0.01f)) {
+            m_targetPoint = Text::ParseVec3(GetVariableString("kim_bf_target_point"));
+        }
+
+        UI::PopItemWidth();
+
         UI::SameLine();
-        UI::Text("Precision");
-        UI::TextDimmed("1 = max precision. higher values = less precision. theoretical maximum is 2^64-1, however this field is limited to 32 bit values. Also 1 might be completely overkill and higher values could lead to the same result.");
+        UI::Text("Target Position");
+
+        if (m_Manager.m_simManager.InRace) {
+            TM::GameCamera@ cam = GetCurrentCamera();
+            if (cam.NameId == "") {
+                if (UI::Button("Copy from camera position")) {
+                    m_targetPoint = cam.Location.Position;
+                    SetVariable("kim_bf_target_point", m_targetPoint.ToString());
+                }
+            } else {
+                if (UI::Button("Copy from car position")) {
+                    m_targetPoint = m_Manager.m_simManager.Dyna.CurrentState.Location.Position;
+                    SetVariable("kim_bf_target_point", m_targetPoint.ToString());
+                }
+            }
+        }
+
+        UI::Dummy(vec2(0, 15));
+
+        UI::PushItemWidth(200);
+
+        UI::Text("Time frame in which distance and/or speed will be evaluated");
+        m_targetPointEvalMin = UI::InputTimeVar("##targetpointevalmin", "kim_bf_target_point_eval_min", 10);
+        m_targetPointEvalMax = UI::InputTimeVar("##targetpointevalmax", "kim_bf_target_point_eval_max", 10);
+
+        UI::PopItemWidth();
+    } else {
+        UI::Dummy(vec2(0, 15));
+        
+        // precise time checkbox
+        UI::PushItemWidth(180);
+
+        m_usePreciseTime = UI::CheckboxVar("##precisetimeenabled", "kim_bf_use_precise_time");
+        UI::SameLine();
+        UI::Text("Use precise time");
+    
+        if (m_usePreciseTime) {
+            // precise time precision
+            UI::SameLine();
+            // TODO: inputintvar is not enough to accept 64 bit values
+            int preciseTimePrecision = UI::InputIntVar("##precisetimeprecision", "kim_bf_precise_time_precision", 1);
+            if (preciseTimePrecision < 1) {
+                preciseTimePrecision = 1;
+                SetVariable("kim_bf_precise_time_precision", 1);
+            }
+            m_preciseTimePrecision = preciseTimePrecision;
+            UI::SameLine();
+            UI::Text("Precision");
+            UI::TextDimmed("1 = max precision. higher values = less precision. theoretical maximum is 2^64-1, however this field is limited to 32 bit values. Also 1 might be completely overkill and higher values could lead to the same result.");
+        }
     }
     
     UI::PopItemWidth();
@@ -1968,7 +2183,7 @@ void BruteforceSettingsWindow() {
     UI::Dummy(vec2(0, 15));
 
     UI::PushItemWidth(120);
-    UI::Text("Steering Modfication Value Range:");
+    UI::Text("Steering Modfication Value Diff:");
     int modifySteeringMinDiff = Math::Clamp(UI::SliderIntVar("Min Steer Diff          ", "kim_bf_modify_steering_min_diff", 1, 131072), 1, 131072);
     SetVariable("kim_bf_modify_steering_min_diff", modifySteeringMinDiff);
     if (uint(modifySteeringMinDiff) > m_modifySteeringMaxDiff) {
@@ -1980,10 +2195,18 @@ void BruteforceSettingsWindow() {
     if (uint(modifySteeringMaxDiff) < m_modifySteeringMinDiff) {
         SetVariable("kim_bf_modify_steering_min_diff", modifySteeringMaxDiff);
     }
-
     m_modifySteeringMinDiff = modifySteeringMinDiff;
     m_modifySteeringMaxDiff = modifySteeringMaxDiff;
-    UI::TextDimmed("You already know what this is");
+    UI::TextDimmed("Difference in which steering inputs can be modified. Example: Setting this 1000 and 2000 will cause an input of 50000 to be changed to 48000-49000 and 51000-52000");
+
+    UI::Text("Steering Modfication Value Range:");
+    m_modifySteeringMinRange = UI::SliderIntVar("Min Steer Range          ", "kim_bf_modify_steering_min_range", -65536, 65536);
+    UI::SameLine();
+    m_modifySteeringMaxRange = UI::SliderIntVar("Max Steer Range", "kim_bf_modify_steering_max_range", -65536, 65536);
+    m_modifySteeringMinRange = Math::Min(m_modifySteeringMinRange, m_modifySteeringMaxRange);
+    SetVariable("kim_bf_modify_steering_min_range", m_modifySteeringMinRange);
+
+    UI::TextDimmed("Range in which steering inputs can be modified. Example: Setting this to -60000 and -20000 will cause the bf to only produce left steering values");
 
     UI::PopItemWidth();
     
@@ -2152,6 +2375,7 @@ void BruteforceSettingsWindow() {
 
 void Main() {
     @m_Manager = Manager();
+    @m_Manager.m_simManager = GetSimulationManager();
 
     RegisterVariable("kim_bf_result_file_name", "result.txt");
 
@@ -2160,6 +2384,11 @@ void Main() {
 
     RegisterVariable("kim_bf_use_precise_time", true);
     RegisterVariable("kim_bf_precise_time_precision", 1.0);
+
+    RegisterVariable("kim_bf_target_point", "0.0 0.0 0.0");
+    RegisterVariable("kim_bf_target_point_ratio", 0.5);
+    RegisterVariable("kim_bf_target_point_eval_min", 0.0);
+    RegisterVariable("kim_bf_target_point_eval_max", 0.0);
 
     RegisterVariable("kim_bf_modify_steering_min_time", 0.0);
     RegisterVariable("kim_bf_modify_acceleration_min_time", 0.0);
@@ -2191,6 +2420,8 @@ void Main() {
 
     RegisterVariable("kim_bf_modify_steering_min_diff", 1.0);
     RegisterVariable("kim_bf_modify_steering_max_diff", 131072.0);
+    RegisterVariable("kim_bf_modify_steering_min_range", -65536.0);
+    RegisterVariable("kim_bf_modify_steering_max_range", 65536.0);
 
     // TODO: implement
     // RegisterVariable("kim_bf_modify_only_existing_inputs", false);
@@ -2219,7 +2450,7 @@ PluginInfo@ GetPluginInfo() {
     auto info = PluginInfo();
     info.Name = "Kim's Bruteforce Controller";
     info.Author = "Kim";
-    info.Version = "v1.3.4";
+    info.Version = "v1.3.5";
     info.Description = "General bruteforcing capabilities";
     return info;
 }
