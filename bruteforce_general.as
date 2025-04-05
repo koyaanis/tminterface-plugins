@@ -702,10 +702,6 @@ void UpdateSettings() {
     m_modifySteeringMinRange = Math::Min(m_modifySteeringMinRange, m_modifySteeringMaxRange);
     SetVariable("kim_bf_modify_steering_min_range", m_modifySteeringMinRange);
 
-    // TODO: implement
-    // modify only existing inputs
-    // m_modifyOnlyExistingInputs = GetVariableBool("kim_bf_modify_only_existing_inputs");
-
     // use custom stop time delta only once
     bool previousCustomStopTimeDeltaUseOnlyOnce = m_customStopTimeDeltaUseOnlyOnce;
     m_customStopTimeDeltaUseOnlyOnce = GetVariableBool("kim_bf_custom_stop_time_delta_use_only_once");
@@ -1575,22 +1571,22 @@ class BruteforceController {
         }
     }
 
-    void HandleSearchPhase(SimulationManager@ simManager, BFEvaluationResponse&out response, BFEvaluationInfo&in info) {
-        if (m_usePreciseTime) {
-            PreciseTime::HandleSearchPhase(m_simManager, response, info);
-            return;
-        } else {
-            NormalTime::HandleSearchPhase(m_simManager, response, info);
-            return;
-        }
-    }
-
     void HandleInitialPhase(SimulationManager@ simManager, BFEvaluationResponse&out response, BFEvaluationInfo&in info) {
         if (m_usePreciseTime) {
             PreciseTime::HandleInitialPhase(m_simManager, response, info);
             return;
         } else {
             NormalTime::HandleInitialPhase(m_simManager, response, info);
+            return;
+        }
+    }
+
+    void HandleSearchPhase(SimulationManager@ simManager, BFEvaluationResponse&out response, BFEvaluationInfo&in info) {
+        if (m_usePreciseTime) {
+            PreciseTime::HandleSearchPhase(m_simManager, response, info);
+            return;
+        } else {
+            NormalTime::HandleSearchPhase(m_simManager, response, info);
             return;
         }
     }
@@ -1718,56 +1714,6 @@ class BruteforceController {
     private uint m_rewindIndex = 0;
 }
 
-class Manager {
-    Manager() {
-        @m_bfController = BruteforceController();
-    }
-    ~Manager() {}
-
-    void OnSimulationBegin(SimulationManager@ simManager) {
-        @m_simManager = simManager;
-        m_simManager.RemoveStateValidation();
-        m_bfController.OnSimulationBegin(simManager);
-    }
-
-    void OnSimulationStep(SimulationManager@ simManager, bool userCancelled) {
-        if (userCancelled) {
-            m_bfController.OnSimulationEnd(simManager);
-            return;
-        }
-
-        m_bfController.OnSimulationStep(simManager);
-    }
-
-    void OnSimulationEnd(SimulationManager@ simManager, uint result) {
-        m_bfController.OnSimulationEnd(simManager);
-    }
-
-    void OnCheckpointCountChanged(SimulationManager@ simManager, int count, int target) {
-        m_bfController.OnCheckpointCountChanged(simManager, count, target);
-    }
-
-    SimulationManager@ m_simManager;
-    BruteforceController@ m_bfController;
-}
-
-/* these functions are called from the game, we relay them to our manager */
-void OnSimulationBegin(SimulationManager@ simManager) {
-    m_Manager.OnSimulationBegin(simManager);
-}
-
-void OnSimulationEnd(SimulationManager@ simManager, uint result) {
-    m_Manager.OnSimulationEnd(simManager, result);
-}
-
-void OnSimulationStep(SimulationManager@ simManager, bool userCancelled) {
-    m_Manager.OnSimulationStep(simManager, userCancelled);
-}
-
-void OnCheckpointCountChanged(SimulationManager@ simManager, int count, int target) {
-    m_Manager.OnCheckpointCountChanged(simManager, count, target);
-}
-
 void BruteforceSettingsWindow() {
     UI::Dummy(vec2(0, 15));
 
@@ -1848,6 +1794,8 @@ void BruteforceSettingsWindow() {
     UI::PopItemWidth();
 
     if (m_Manager.m_bfController.m_targetType == TargetType::SinglePoint) {
+        m_usePreciseTime = false;
+
         UI::PushItemWidth(200);
 
         m_targetPointRatio = UI::SliderFloatVar("Ratio", "kim_bf_target_point_ratio", 0.0f, 1.0f);
@@ -1923,10 +1871,10 @@ void BruteforceSettingsWindow() {
             UI::Text("Precision");
             UI::TextDimmed("1 = max precision. higher values = less precision. theoretical maximum is 2^64-1, however this field is limited to 32 bit values. Also 1 might be completely overkill and higher values could lead to the same result.");
         }
+
+        UI::PopItemWidth();
     }
     
-    UI::PopItemWidth();
-
     UI::Dummy(vec2(0, 15));
     UI::Separator();
     UI::Dummy(vec2(0, 15));
@@ -2209,15 +2157,6 @@ void BruteforceSettingsWindow() {
     UI::TextDimmed("Range in which steering inputs can be modified. Example: Setting this to -60000 and -20000 will cause the bf to only produce left steering values");
 
     UI::PopItemWidth();
-    
-    /* TODO: implement
-    UI::Dummy(vec2(0, 15));
-    UI::Separator();
-    UI::Dummy(vec2(0, 15));
-
-    // kim_bf_modify_only_existing_inputs
-    m_modifyOnlyExistingInputs = UI::CheckboxVar("Modify Only Existing Inputs", "kim_bf_modify_only_existing_inputs");
-    */
 
     UI::Dummy(vec2(0, 15));
     UI::Separator();
@@ -2247,7 +2186,7 @@ void BruteforceSettingsWindow() {
     UI::Separator();
     UI::Dummy(vec2(0, 15));
 
-    /* custom stop time */
+    // custom stop time
     UI::PushItemWidth(180);
     // m_customStopTimeDeltaUseOnlyOnce
     if (!m_useLiveDebugging || !m_Manager.m_bfController.active) {
@@ -2329,7 +2268,7 @@ void BruteforceSettingsWindow() {
 
 
 
-    /* START OF LIVE DEBUGGING */
+    // START OF LIVE DEBUGGING
     UI::Dummy(vec2(0, 15));
     UI::Separator();
     UI::Dummy(vec2(0, 15));
@@ -2360,16 +2299,9 @@ void BruteforceSettingsWindow() {
         m_customStopTimeDeltaIsIgnored = false;
     }
 
-
     UI::Dummy(vec2(0, 15));
     UI::Separator();
     UI::Dummy(vec2(0, 15));
-
-
-
-
-
-
 }
 
 
@@ -2422,9 +2354,6 @@ void Main() {
     RegisterVariable("kim_bf_modify_steering_max_diff", 131072.0);
     RegisterVariable("kim_bf_modify_steering_min_range", -65536.0);
     RegisterVariable("kim_bf_modify_steering_max_range", 65536.0);
-
-    // TODO: implement
-    // RegisterVariable("kim_bf_modify_only_existing_inputs", false);
 
     RegisterVariable("kim_bf_use_fill_missing_inputs_steering", false);
     RegisterVariable("kim_bf_use_fill_missing_inputs_acceleration", false);
